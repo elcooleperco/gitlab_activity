@@ -35,5 +35,8 @@ docker-compose.override.yml
 # Logs
 *.log
 
+# Claude
+CLAUDE.md
+
 # Database
 *.sql.bak
