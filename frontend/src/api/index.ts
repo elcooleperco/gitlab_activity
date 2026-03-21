@@ -23,14 +23,18 @@ export const getUserActivity = (id: number, dateFrom: string, dateTo: string) =>
 export const getProjects = (search?: string) => api.get('/projects', { params: { search } })
 
 /** Аналитика */
-export const getSummary = (dateFrom: string, dateTo: string) =>
-  api.get('/analytics/summary', { params: { date_from: dateFrom, date_to: dateTo } })
-export const getDailyActivity = (dateFrom: string, dateTo: string, userId?: number) =>
-  api.get('/analytics/daily', { params: { date_from: dateFrom, date_to: dateTo, user_id: userId } })
+export const getSummary = (dateFrom: string, dateTo: string, userIds?: number[]) =>
+  api.get('/analytics/summary', { params: { date_from: dateFrom, date_to: dateTo, user_ids: userIds?.join(',') || undefined } })
+export const getDailyActivity = (dateFrom: string, dateTo: string, userId?: number, userIds?: number[]) =>
+  api.get('/analytics/daily', { params: { date_from: dateFrom, date_to: dateTo, user_id: userId, user_ids: userIds?.join(',') || undefined } })
 export const getRanking = (dateFrom: string, dateTo: string) =>
   api.get('/analytics/ranking', { params: { date_from: dateFrom, date_to: dateTo } })
 export const getInactiveUsers = (dateFrom: string, dateTo: string) =>
   api.get('/analytics/inactive', { params: { date_from: dateFrom, date_to: dateTo } })
+export const getContributionMap = (userId: number, dateFrom: string, dateTo: string) =>
+  api.get(`/analytics/contribution/${userId}`, { params: { date_from: dateFrom, date_to: dateTo } })
+export const getUserDayDetails = (userId: number, targetDate: string) =>
+  api.get(`/analytics/user-day/${userId}`, { params: { target_date: targetDate } })
 
 /** Экспорт */
 export const exportSummaryCsv = (dateFrom: string, dateTo: string) =>

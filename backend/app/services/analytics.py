@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlalchemy import select, func, case, and_
+from sqlalchemy import select, func, case, and_, or_, union_all, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
@@ -17,7 +17,11 @@ class AnalyticsService:
         self.session = session
 
     async def get_summary(
-        self, date_from: date, date_to: date, user_id: int | None = None
+        self,
+        date_from: date,
+        date_to: date,
+        user_id: int | None = None,
+        user_ids: list[int] | None = None,
     ) -> list[dict]:
         """Получить сводку активности по каждому пользователю за период."""
         users_result = await self.session.execute(select(GitlabUser))
@@ -27,24 +31,40 @@ class AnalyticsService:
         for user in users:
             if user_id and user.id != user_id:
                 continue
+            if user_ids and user.id not in user_ids:
+                continue
 
             metrics = await self._calc_user_metrics(user.id, date_from, date_to)
+            last_activity = await self._get_last_activity_date(user.id)
             summary.append({
                 "user_id": user.id,
                 "username": user.username,
                 "name": user.name,
                 "avatar_url": user.avatar_url,
+                "last_seen": last_activity,
                 **metrics,
             })
 
-        # Сортируем по общей активности (убывание)
         summary.sort(key=lambda x: x["total_score"], reverse=True)
         return summary
 
     async def get_daily_activity(
-        self, date_from: date, date_to: date, user_id: int | None = None
+        self,
+        date_from: date,
+        date_to: date,
+        user_id: int | None = None,
+        user_ids: list[int] | None = None,
     ) -> list[dict]:
         """Получить дневную разбивку активности."""
+        # Фильтр по пользователям
+        def _user_filter(col):
+            filters = [col.is_not(None)]
+            if user_id:
+                filters.append(col == user_id)
+            elif user_ids:
+                filters.append(col.in_(user_ids))
+            return filters
+
         # Коммиты по дням
         commits_q = (
             select(
@@ -58,18 +78,15 @@ class AnalyticsService:
                 and_(
                     func.date(Commit.committed_at) >= date_from,
                     func.date(Commit.committed_at) <= date_to,
-                    Commit.user_id.is_not(None),
-                    *([Commit.user_id == user_id] if user_id else []),
+                    *_user_filter(Commit.user_id),
                 )
             )
             .group_by(func.date(Commit.committed_at), Commit.user_id)
         )
         commits_result = await self.session.execute(commits_q)
-        commits_rows = commits_result.fetchall()
 
-        # Собираем по (день, пользователь)
         daily: dict[tuple, dict] = {}
-        for row in commits_rows:
+        for row in commits_result.fetchall():
             key = (str(row.day), row.user_id)
             daily[key] = {
                 "date": str(row.day),
@@ -93,14 +110,12 @@ class AnalyticsService:
                 and_(
                     func.date(MergeRequest.created_at) >= date_from,
                     func.date(MergeRequest.created_at) <= date_to,
-                    MergeRequest.author_id.is_not(None),
-                    *([MergeRequest.author_id == user_id] if user_id else []),
+                    *_user_filter(MergeRequest.author_id),
                 )
             )
             .group_by(func.date(MergeRequest.created_at), MergeRequest.author_id)
         )
-        mr_result = await self.session.execute(mr_q)
-        for row in mr_result.fetchall():
+        for row in (await self.session.execute(mr_q)).fetchall():
             key = (str(row.day), row.author_id)
             if key not in daily:
                 daily[key] = {
@@ -121,14 +136,12 @@ class AnalyticsService:
                 and_(
                     func.date(Issue.created_at) >= date_from,
                     func.date(Issue.created_at) <= date_to,
-                    Issue.author_id.is_not(None),
-                    *([Issue.author_id == user_id] if user_id else []),
+                    *_user_filter(Issue.author_id),
                 )
             )
             .group_by(func.date(Issue.created_at), Issue.author_id)
         )
-        issue_result = await self.session.execute(issue_q)
-        for row in issue_result.fetchall():
+        for row in (await self.session.execute(issue_q)).fetchall():
             key = (str(row.day), row.author_id)
             if key not in daily:
                 daily[key] = {
@@ -149,15 +162,13 @@ class AnalyticsService:
                 and_(
                     func.date(Note.created_at) >= date_from,
                     func.date(Note.created_at) <= date_to,
-                    Note.author_id.is_not(None),
                     Note.system.is_(False),
-                    *([Note.author_id == user_id] if user_id else []),
+                    *_user_filter(Note.author_id),
                 )
             )
             .group_by(func.date(Note.created_at), Note.author_id)
         )
-        notes_result = await self.session.execute(notes_q)
-        for row in notes_result.fetchall():
+        for row in (await self.session.execute(notes_q)).fetchall():
             key = (str(row.day), row.author_id)
             if key not in daily:
                 daily[key] = {
@@ -167,7 +178,137 @@ class AnalyticsService:
                 }
             daily[key]["notes"] = row.count
 
-        result = sorted(daily.values(), key=lambda x: x["date"])
+        return sorted(daily.values(), key=lambda x: x["date"])
+
+    async def get_contribution_map(
+        self, user_id: int, date_from: date, date_to: date
+    ) -> list[dict]:
+        """Тепловая карта вкладов (как в GitLab) — количество действий по дням."""
+        # Считаем общее количество действий по дням из всех таблиц
+        commits_q = (
+            select(
+                func.date(Commit.committed_at).label("day"),
+                func.count().label("cnt"),
+            )
+            .where(and_(Commit.user_id == user_id, func.date(Commit.committed_at) >= date_from, func.date(Commit.committed_at) <= date_to))
+            .group_by(func.date(Commit.committed_at))
+        )
+        mr_q = (
+            select(
+                func.date(MergeRequest.created_at).label("day"),
+                func.count().label("cnt"),
+            )
+            .where(and_(MergeRequest.author_id == user_id, func.date(MergeRequest.created_at) >= date_from, func.date(MergeRequest.created_at) <= date_to))
+            .group_by(func.date(MergeRequest.created_at))
+        )
+        issues_q = (
+            select(
+                func.date(Issue.created_at).label("day"),
+                func.count().label("cnt"),
+            )
+            .where(and_(Issue.author_id == user_id, func.date(Issue.created_at) >= date_from, func.date(Issue.created_at) <= date_to))
+            .group_by(func.date(Issue.created_at))
+        )
+        notes_q = (
+            select(
+                func.date(Note.created_at).label("day"),
+                func.count().label("cnt"),
+            )
+            .where(and_(Note.author_id == user_id, Note.system.is_(False), func.date(Note.created_at) >= date_from, func.date(Note.created_at) <= date_to))
+            .group_by(func.date(Note.created_at))
+        )
+        events_q = (
+            select(
+                func.date(Event.created_at).label("day"),
+                func.count().label("cnt"),
+            )
+            .where(and_(Event.user_id == user_id, func.date(Event.created_at) >= date_from, func.date(Event.created_at) <= date_to))
+            .group_by(func.date(Event.created_at))
+        )
+
+        # Собираем все дни и суммируем
+        day_counts: dict[str, int] = {}
+        for q in [commits_q, mr_q, issues_q, notes_q, events_q]:
+            for row in (await self.session.execute(q)).fetchall():
+                d = str(row.day)
+                day_counts[d] = day_counts.get(d, 0) + row.cnt
+
+        return [{"date": d, "count": c} for d, c in sorted(day_counts.items())]
+
+    async def get_user_day_details(
+        self, user_id: int, target_date: date
+    ) -> dict:
+        """Детальный список действий пользователя за конкретный день."""
+        result: dict = {"date": str(target_date), "user_id": user_id, "actions": []}
+
+        # Коммиты
+        commits_q = select(Commit).where(
+            and_(Commit.user_id == user_id, func.date(Commit.committed_at) == target_date)
+        )
+        for c in (await self.session.execute(commits_q)).scalars().all():
+            result["actions"].append({
+                "type": "commit",
+                "time": c.committed_at.isoformat() if c.committed_at else None,
+                "title": (c.message or "")[:120],
+                "details": f"+{c.additions} -{c.deletions}",
+                "project_id": c.project_id,
+            })
+
+        # MR
+        mr_q = select(MergeRequest).where(
+            and_(MergeRequest.author_id == user_id, func.date(MergeRequest.created_at) == target_date)
+        )
+        for mr in (await self.session.execute(mr_q)).scalars().all():
+            result["actions"].append({
+                "type": "merge_request",
+                "time": mr.created_at.isoformat() if mr.created_at else None,
+                "title": mr.title,
+                "details": f"!{mr.iid} ({mr.state})",
+                "project_id": mr.project_id,
+            })
+
+        # Issues
+        issues_q = select(Issue).where(
+            and_(Issue.author_id == user_id, func.date(Issue.created_at) == target_date)
+        )
+        for issue in (await self.session.execute(issues_q)).scalars().all():
+            result["actions"].append({
+                "type": "issue",
+                "time": issue.created_at.isoformat() if issue.created_at else None,
+                "title": issue.title,
+                "details": f"#{issue.iid} ({issue.state})",
+                "project_id": issue.project_id,
+            })
+
+        # Комментарии
+        notes_q = select(Note).where(
+            and_(Note.author_id == user_id, Note.system.is_(False), func.date(Note.created_at) == target_date)
+        )
+        for n in (await self.session.execute(notes_q)).scalars().all():
+            result["actions"].append({
+                "type": "note",
+                "time": n.created_at.isoformat() if n.created_at else None,
+                "title": f"Комментарий к {n.noteable_type} #{n.noteable_id}",
+                "details": f"{n.body_length} символов",
+                "project_id": n.project_id,
+            })
+
+        # Пайплайны
+        pipelines_q = select(Pipeline).where(
+            and_(Pipeline.user_id == user_id, func.date(Pipeline.created_at) == target_date)
+        )
+        for p in (await self.session.execute(pipelines_q)).scalars().all():
+            result["actions"].append({
+                "type": "pipeline",
+                "time": p.created_at.isoformat() if p.created_at else None,
+                "title": f"Pipeline #{p.id} ({p.status})",
+                "details": f"{p.duration or 0} сек, ветка: {p.ref}",
+                "project_id": p.project_id,
+            })
+
+        # Сортируем по времени
+        result["actions"].sort(key=lambda a: a.get("time") or "")
+        result["total_actions"] = len(result["actions"])
         return result
 
     async def get_inactive_users(
@@ -177,101 +318,79 @@ class AnalyticsService:
         summary = await self.get_summary(date_from, date_to)
         return [u for u in summary if u["total_score"] == 0]
 
+    async def _get_last_activity_date(self, user_id: int) -> str | None:
+        """Получить дату последней активности пользователя из всех собранных данных."""
+        dates = []
+
+        # Последний коммит
+        q = select(func.max(Commit.committed_at)).where(Commit.user_id == user_id)
+        r = (await self.session.execute(q)).scalar()
+        if r:
+            dates.append(r)
+
+        # Последний MR
+        q = select(func.max(MergeRequest.created_at)).where(MergeRequest.author_id == user_id)
+        r = (await self.session.execute(q)).scalar()
+        if r:
+            dates.append(r)
+
+        # Последняя Issue
+        q = select(func.max(Issue.created_at)).where(Issue.author_id == user_id)
+        r = (await self.session.execute(q)).scalar()
+        if r:
+            dates.append(r)
+
+        # Последний комментарий
+        q = select(func.max(Note.created_at)).where(and_(Note.author_id == user_id, Note.system.is_(False)))
+        r = (await self.session.execute(q)).scalar()
+        if r:
+            dates.append(r)
+
+        # Последнее событие
+        q = select(func.max(Event.created_at)).where(Event.user_id == user_id)
+        r = (await self.session.execute(q)).scalar()
+        if r:
+            dates.append(r)
+
+        if dates:
+            return max(dates).isoformat()
+        return None
+
     async def _calc_user_metrics(
         self, user_id: int, date_from: date, date_to: date
     ) -> dict:
         """Рассчитать метрики для одного пользователя за период."""
-        # Коммиты
         commits_q = select(
             func.count().label("count"),
             func.coalesce(func.sum(Commit.additions), 0).label("additions"),
             func.coalesce(func.sum(Commit.deletions), 0).label("deletions"),
-        ).where(
-            and_(
-                Commit.user_id == user_id,
-                func.date(Commit.committed_at) >= date_from,
-                func.date(Commit.committed_at) <= date_to,
-            )
-        )
+        ).where(and_(Commit.user_id == user_id, func.date(Commit.committed_at) >= date_from, func.date(Commit.committed_at) <= date_to))
         commits = (await self.session.execute(commits_q)).fetchone()
 
-        # MR созданные
-        mr_created_q = select(func.count()).where(
-            and_(
-                MergeRequest.author_id == user_id,
-                func.date(MergeRequest.created_at) >= date_from,
-                func.date(MergeRequest.created_at) <= date_to,
-            )
-        )
+        mr_created_q = select(func.count()).where(and_(MergeRequest.author_id == user_id, func.date(MergeRequest.created_at) >= date_from, func.date(MergeRequest.created_at) <= date_to))
         mr_created = (await self.session.execute(mr_created_q)).scalar() or 0
 
-        # MR замерженные
-        mr_merged_q = select(func.count()).where(
-            and_(
-                MergeRequest.author_id == user_id,
-                MergeRequest.state == "merged",
-                func.date(MergeRequest.merged_at) >= date_from,
-                func.date(MergeRequest.merged_at) <= date_to,
-            )
-        )
+        mr_merged_q = select(func.count()).where(and_(MergeRequest.author_id == user_id, MergeRequest.state == "merged", func.date(MergeRequest.merged_at) >= date_from, func.date(MergeRequest.merged_at) <= date_to))
         mr_merged = (await self.session.execute(mr_merged_q)).scalar() or 0
 
-        # Issues созданные
-        issues_created_q = select(func.count()).where(
-            and_(
-                Issue.author_id == user_id,
-                func.date(Issue.created_at) >= date_from,
-                func.date(Issue.created_at) <= date_to,
-            )
-        )
+        issues_created_q = select(func.count()).where(and_(Issue.author_id == user_id, func.date(Issue.created_at) >= date_from, func.date(Issue.created_at) <= date_to))
         issues_created = (await self.session.execute(issues_created_q)).scalar() or 0
 
-        # Issues закрытые (как assignee)
-        issues_closed_q = select(func.count()).where(
-            and_(
-                Issue.assignee_id == user_id,
-                Issue.state == "closed",
-                func.date(Issue.closed_at) >= date_from,
-                func.date(Issue.closed_at) <= date_to,
-            )
-        )
+        issues_closed_q = select(func.count()).where(and_(Issue.assignee_id == user_id, Issue.state == "closed", func.date(Issue.closed_at) >= date_from, func.date(Issue.closed_at) <= date_to))
         issues_closed = (await self.session.execute(issues_closed_q)).scalar() or 0
 
-        # Комментарии (не системные)
-        notes_q = select(func.count()).where(
-            and_(
-                Note.author_id == user_id,
-                Note.system.is_(False),
-                func.date(Note.created_at) >= date_from,
-                func.date(Note.created_at) <= date_to,
-            )
-        )
+        notes_q = select(func.count()).where(and_(Note.author_id == user_id, Note.system.is_(False), func.date(Note.created_at) >= date_from, func.date(Note.created_at) <= date_to))
         notes_count = (await self.session.execute(notes_q)).scalar() or 0
 
-        # Пайплайны
         pipelines_q = select(
             func.count().label("total"),
             func.sum(case((Pipeline.status == "success", 1), else_=0)).label("success"),
-        ).where(
-            and_(
-                Pipeline.user_id == user_id,
-                func.date(Pipeline.created_at) >= date_from,
-                func.date(Pipeline.created_at) <= date_to,
-            )
-        )
+        ).where(and_(Pipeline.user_id == user_id, func.date(Pipeline.created_at) >= date_from, func.date(Pipeline.created_at) <= date_to))
         pipelines = (await self.session.execute(pipelines_q)).fetchone()
 
-        # События
-        events_q = select(func.count()).where(
-            and_(
-                Event.user_id == user_id,
-                func.date(Event.created_at) >= date_from,
-                func.date(Event.created_at) <= date_to,
-            )
-        )
+        events_q = select(func.count()).where(and_(Event.user_id == user_id, func.date(Event.created_at) >= date_from, func.date(Event.created_at) <= date_to))
         events_count = (await self.session.execute(events_q)).scalar() or 0
 
-        # Общий балл активности (простая формула)
         total_score = (
             (commits.count or 0) * 3
             + mr_created * 5
