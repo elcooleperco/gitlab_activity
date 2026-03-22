@@ -1,6 +1,6 @@
 """API управления синхронизацией данных из GitLab."""
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
@@ -93,12 +93,25 @@ async def get_sync_progress():
 
 
 @router.post("/cancel")
-async def cancel_sync():
-    """Отменить текущую синхронизацию."""
-    if not sync_progress.running:
-        return {"status": "not_running"}
-    sync_progress.cancel()
-    return {"status": "cancelling"}
+async def cancel_sync(
+    db: AsyncSession = Depends(get_db),
+):
+    """Отменить текущую синхронизацию или сбросить зависшую."""
+    # Если синхронизация реально работает в этом процессе — ставим флаг отмены
+    if sync_progress.running:
+        sync_progress.cancel()
+
+    # Сбрасываем все записи в БД со статусом "running" → "cancelled"
+    from sqlalchemy import update
+    result = await db.execute(
+        update(SyncLog)
+        .where(SyncLog.status == "running")
+        .values(status="cancelled", finished_at=datetime.now(), error_message="Отменена пользователем")
+    )
+    await db.commit()
+    cancelled_count = result.rowcount
+
+    return {"status": "cancelled", "reset_count": cancelled_count}
 
 
 class PurgeRequest(BaseModel):

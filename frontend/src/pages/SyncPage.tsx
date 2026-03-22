@@ -128,12 +128,25 @@ export default function SyncPage() {
 
   const handleCancel = async () => {
     try {
-      await cancelSync()
-      message.info('Отправлен запрос на отмену...')
+      const res = await cancelSync()
+      if (res.data.reset_count > 0) {
+        message.success(`Сброшено зависших синхронизаций: ${res.data.reset_count}`)
+      } else {
+        message.info('Отправлен запрос на отмену...')
+      }
+      // Если синхронизация реально не работает — сбросить состояние
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      setSyncing(false)
+      setProgress(null)
+      loadHistory()
     } catch (err: any) {
       message.error('Ошибка отмены: ' + (err?.message || ''))
     }
   }
+
+  // Проверяем есть ли зависшие running записи в истории
+  const hasStuckRunning = history.some((h: any) => h.status === 'running')
 
   const statusColor: Record<string, string> = {
     running: 'blue',
@@ -201,13 +214,13 @@ export default function SyncPage() {
             >
               Запустить синхронизацию
             </Button>
-            {syncing && (
+            {(syncing || hasStuckRunning) && (
               <Button
                 danger
                 icon={<StopOutlined />}
                 onClick={handleCancel}
               >
-                Остановить
+                {hasStuckRunning && !syncing ? 'Сбросить зависшую' : 'Остановить'}
               </Button>
             )}
             <Button
