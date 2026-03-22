@@ -286,7 +286,9 @@ export default function SyncPage() {
                     size="small"
                     current={-1}
                     items={progress.steps?.map((s: any) => ({
-                      title: s.count > 0 ? `${s.name} (${s.count})` : s.name,
+                      title: s.total > 0
+                        ? `${s.name} — ${s.total} (новых: ${s.new}, обновлённых: ${s.updated})`
+                        : s.name,
                       status: s.status === 'completed' ? 'finish' as const
                         : s.status === 'running' ? 'process' as const
                         : s.status === 'failed' ? 'error' as const

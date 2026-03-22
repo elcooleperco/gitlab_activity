@@ -79,8 +79,8 @@ class SyncService:
             # Шаг 1: Пользователи
             sync_progress.set_step("Загрузка пользователей")
             sync_progress.add_log("Загрузка списка пользователей из GitLab...")
-            await self.sync_users()
-            sync_progress.add_to_step("Загрузка пользователей", self.counters.get("users", 0))
+            total, new, updated = await self.sync_users()
+            sync_progress.add_to_step("Загрузка пользователей", total=total, new=new, updated=updated)
             sync_progress.complete_step("Загрузка пользователей")
             sync_progress.percent = 5
             self._check_cancelled()
@@ -88,8 +88,8 @@ class SyncService:
             # Шаг 2: Проекты
             sync_progress.set_step("Загрузка проектов")
             sync_progress.add_log("Загрузка списка проектов из GitLab...")
-            await self.sync_projects()
-            sync_progress.add_to_step("Загрузка проектов", self.counters.get("projects", 0))
+            total, new, updated = await self.sync_projects()
+            sync_progress.add_to_step("Загрузка проектов", total=total, new=new, updated=updated)
             sync_progress.complete_step("Загрузка проектов")
             sync_progress.percent = 10
             self._check_cancelled()
@@ -103,84 +103,84 @@ class SyncService:
 
             # Шаг 3: Коммиты
             sync_progress.set_step("Коммиты по проектам")
-            prev_commits = self.counters.get("commits", 0)
+            before_commits = await self._count_rows(Commit)
             for i, pid in enumerate(project_ids):
                 self._check_cancelled()
                 pname = project_names.get(pid, str(pid))
                 sync_progress.add_log(f"Коммиты: {pname} ({i+1}/{total_projects})")
                 sync_progress.percent = 10 + (i / max(total_projects, 1)) * 15
                 await self.sync_project_commits(pid, date_from, date_to)
-                new_commits = self.counters.get("commits", 0) - prev_commits
-                if new_commits > 0:
-                    sync_progress.add_to_step("Коммиты по проектам", new_commits)
-                    prev_commits = self.counters.get("commits", 0)
+            after_commits = await self._count_rows(Commit)
+            step_total = self.counters.get("commits", 0)
+            step_new = after_commits - before_commits
+            sync_progress.add_to_step("Коммиты по проектам", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
             sync_progress.complete_step("Коммиты по проектам")
             sync_progress.percent = 25
 
             # Шаг 4: MR
             sync_progress.set_step("Merge Requests")
-            prev_mr = self.counters.get("merge_requests", 0)
+            before_mr = await self._count_rows(MergeRequest)
             for i, pid in enumerate(project_ids):
                 self._check_cancelled()
                 pname = project_names.get(pid, str(pid))
                 sync_progress.add_log(f"MR: {pname} ({i+1}/{total_projects})")
                 sync_progress.percent = 25 + (i / max(total_projects, 1)) * 15
                 await self.sync_project_merge_requests(pid, date_from, date_to)
-                new_mr = self.counters.get("merge_requests", 0) - prev_mr
-                if new_mr > 0:
-                    sync_progress.add_to_step("Merge Requests", new_mr)
-                    prev_mr = self.counters.get("merge_requests", 0)
+            after_mr = await self._count_rows(MergeRequest)
+            step_total = self.counters.get("merge_requests", 0)
+            step_new = after_mr - before_mr
+            sync_progress.add_to_step("Merge Requests", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
             sync_progress.complete_step("Merge Requests")
             sync_progress.percent = 40
 
             # Шаг 5: Issues
             sync_progress.set_step("Issues")
-            prev_issues = self.counters.get("issues", 0)
+            before_issues = await self._count_rows(Issue)
             for i, pid in enumerate(project_ids):
                 self._check_cancelled()
                 pname = project_names.get(pid, str(pid))
                 sync_progress.add_log(f"Issues: {pname} ({i+1}/{total_projects})")
                 sync_progress.percent = 40 + (i / max(total_projects, 1)) * 15
                 await self.sync_project_issues(pid, date_from, date_to)
-                new_issues = self.counters.get("issues", 0) - prev_issues
-                if new_issues > 0:
-                    sync_progress.add_to_step("Issues", new_issues)
-                    prev_issues = self.counters.get("issues", 0)
+            after_issues = await self._count_rows(Issue)
+            step_total = self.counters.get("issues", 0)
+            step_new = after_issues - before_issues
+            sync_progress.add_to_step("Issues", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
             sync_progress.complete_step("Issues")
             sync_progress.percent = 55
 
             # Шаг 6: Пайплайны
             sync_progress.set_step("Пайплайны")
-            prev_pipes = self.counters.get("pipelines", 0)
+            before_pipes = await self._count_rows(Pipeline)
             for i, pid in enumerate(project_ids):
                 self._check_cancelled()
                 pname = project_names.get(pid, str(pid))
                 sync_progress.add_log(f"Пайплайны: {pname} ({i+1}/{total_projects})")
                 sync_progress.percent = 55 + (i / max(total_projects, 1)) * 15
                 await self.sync_project_pipelines(pid, date_from, date_to)
-                new_pipes = self.counters.get("pipelines", 0) - prev_pipes
-                if new_pipes > 0:
-                    sync_progress.add_to_step("Пайплайны", new_pipes)
-                    prev_pipes = self.counters.get("pipelines", 0)
+            after_pipes = await self._count_rows(Pipeline)
+            step_total = self.counters.get("pipelines", 0)
+            step_new = after_pipes - before_pipes
+            sync_progress.add_to_step("Пайплайны", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
             sync_progress.complete_step("Пайплайны")
             sync_progress.percent = 70
 
             # Шаг 7: События пользователей
             sync_progress.set_step("События пользователей")
+            before_events = await self._count_rows(Event)
             user_result = await self.session.execute(select(GitlabUser.id, GitlabUser.username))
             users = user_result.fetchall()
             total_users = len(users)
-            prev_events = self.counters.get("events", 0)
 
             for i, (uid, uname) in enumerate(users):
                 self._check_cancelled()
                 sync_progress.add_log(f"События: @{uname} ({i+1}/{total_users})")
                 sync_progress.percent = 70 + (i / max(total_users, 1)) * 20
                 await self.sync_user_events(uid, date_from, date_to)
-                new_events = self.counters.get("events", 0) - prev_events
-                if new_events > 0:
-                    sync_progress.add_to_step("События пользователей", new_events)
-                    prev_events = self.counters.get("events", 0)
+            after_events = await self._count_rows(Event)
+            step_total = self.counters.get("events", 0)
+            step_new = after_events - before_events
+            sync_progress.add_to_step("События пользователей", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
             sync_progress.complete_step("События пользователей")
             sync_progress.percent = 90
 
@@ -307,8 +307,14 @@ class SyncService:
             sync_progress.add_log(f"Привязано осиротевших коммитов: {fixed}")
             logger.info("Привязано осиротевших коммитов", count=fixed)
 
-    async def sync_users(self) -> None:
-        """Синхронизировать пользователей."""
+    async def _count_rows(self, model) -> int:
+        """Посчитать кол-во записей в таблице."""
+        result = await self.session.execute(select(func.count()).select_from(model))
+        return result.scalar() or 0
+
+    async def sync_users(self) -> tuple[int, int, int]:
+        """Синхронизировать пользователей. Возвращает (total, new, updated)."""
+        before = await self._count_rows(GitlabUser)
         users_data = await self.client.get_users()
         count = 0
 
@@ -341,11 +347,16 @@ class SyncService:
             count += 1
 
         await self.session.commit()
+        after = await self._count_rows(GitlabUser)
+        new = after - before
+        updated = count - new
         self.counters["users"] = count
-        logger.info("Пользователи синхронизированы", count=count)
+        logger.info("Пользователи синхронизированы", count=count, new=new, updated=updated)
+        return count, max(new, 0), max(updated, 0)
 
-    async def sync_projects(self) -> None:
-        """Синхронизировать проекты."""
+    async def sync_projects(self) -> tuple[int, int, int]:
+        """Синхронизировать проекты. Возвращает (total, new, updated)."""
+        before = await self._count_rows(GitlabProject)
         projects_data = await self.client.get_projects()
         count = 0
 
@@ -376,8 +387,12 @@ class SyncService:
             count += 1
 
         await self.session.commit()
+        after = await self._count_rows(GitlabProject)
+        new = after - before
+        updated = count - new
         self.counters["projects"] = count
-        logger.info("Проекты синхронизированы", count=count)
+        logger.info("Проекты синхронизированы", count=count, new=new, updated=updated)
+        return count, max(new, 0), max(updated, 0)
 
     async def sync_project_commits(
         self, project_id: int, date_from: date, date_to: date
