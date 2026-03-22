@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, DatePicker, Button, Switch, Table, Tag, Space, message } from 'antd'
+import { Card, DatePicker, Button, Switch, Table, Tag, Space, message, Typography, Modal } from 'antd'
 import { SyncOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import { startSync, getSyncStatus } from '../api'
@@ -47,8 +47,13 @@ export default function SyncPage() {
       }
       /* Обновляем историю с задержкой */
       setTimeout(loadHistory, 2000)
-    } catch {
-      message.error('Ошибка запуска синхронизации')
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Неизвестная ошибка'
+      Modal.error({
+        title: 'Ошибка запуска синхронизации',
+        content: <pre style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{detail}</pre>,
+        width: 600,
+      })
     } finally {
       setSyncing(false)
     }
@@ -84,7 +89,21 @@ export default function SyncPage() {
       key: 'entities',
       render: (e: any) => e ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join(', ') : '—',
     },
-    { title: 'Ошибка', dataIndex: 'error_message', key: 'error', ellipsis: true },
+    {
+      title: 'Ошибка',
+      dataIndex: 'error_message',
+      key: 'error',
+      width: 300,
+      render: (text: string) => text ? (
+        <Typography.Link onClick={() => Modal.error({
+          title: 'Ошибка синхронизации',
+          content: <pre style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{text}</pre>,
+          width: 700,
+        })}>
+          {text.length > 80 ? text.slice(0, 80) + '…' : text}
+        </Typography.Link>
+      ) : '—',
+    },
   ]
 
   return (

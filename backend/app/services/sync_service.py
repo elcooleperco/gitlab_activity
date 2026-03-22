@@ -1,8 +1,27 @@
 """Сервис синхронизации данных из GitLab в локальную БД."""
 
 from datetime import date, datetime, timezone
+from typing import Optional
 
 import structlog
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    """Преобразовать строку из GitLab API в datetime. Возвращает None если невалидно."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if isinstance(value, str):
+        # GitLab отдаёт ISO 8601: "2024-03-22T10:30:45.000Z" или "2024-03-22T10:30:45.000+03:00"
+        val = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(val)
+        except ValueError:
+            return None
+    return None
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,8 +110,8 @@ class SyncService:
                 state=u.get("state", "active"),
                 is_admin=u.get("is_admin", False),
                 avatar_url=u.get("avatar_url"),
-                created_at=u.get("created_at"),
-                last_activity_at=u.get("last_activity_on"),
+                created_at=_parse_dt(u.get("created_at")),
+                last_activity_at=_parse_dt(u.get("last_activity_on")),
                 synced_at=datetime.now(timezone.utc),
             ).on_conflict_do_update(
                 index_elements=["id"],
@@ -103,7 +122,7 @@ class SyncService:
                     "state": u.get("state", "active"),
                     "is_admin": u.get("is_admin", False),
                     "avatar_url": u.get("avatar_url"),
-                    "last_activity_at": u.get("last_activity_on"),
+                    "last_activity_at": _parse_dt(u.get("last_activity_on")),
                     "synced_at": datetime.now(timezone.utc),
                 },
             )
@@ -127,8 +146,8 @@ class SyncService:
                 description=p.get("description"),
                 web_url=p.get("web_url"),
                 visibility=p.get("visibility", "private"),
-                created_at=p.get("created_at"),
-                last_activity_at=p.get("last_activity_at"),
+                created_at=_parse_dt(p.get("created_at")),
+                last_activity_at=_parse_dt(p.get("last_activity_at")),
                 synced_at=datetime.now(timezone.utc),
             ).on_conflict_do_update(
                 index_elements=["id"],
@@ -138,7 +157,7 @@ class SyncService:
                     "description": p.get("description"),
                     "web_url": p.get("web_url"),
                     "visibility": p.get("visibility", "private"),
-                    "last_activity_at": p.get("last_activity_at"),
+                    "last_activity_at": _parse_dt(p.get("last_activity_at")),
                     "synced_at": datetime.now(timezone.utc),
                 },
             )
@@ -176,7 +195,7 @@ class SyncService:
                 author_email=author_email,
                 user_id=user_id,
                 message=c.get("message"),
-                committed_at=c.get("committed_date") or c.get("created_at"),
+                committed_at=_parse_dt(c.get("committed_date") or c.get("created_at")),
                 additions=stats.get("additions", 0),
                 deletions=stats.get("deletions", 0),
             ).on_conflict_do_update(
@@ -217,18 +236,18 @@ class SyncService:
                 state=mr["state"],
                 source_branch=mr.get("source_branch"),
                 target_branch=mr.get("target_branch"),
-                created_at=mr["created_at"],
-                updated_at=mr.get("updated_at"),
-                merged_at=mr.get("merged_at"),
-                closed_at=mr.get("closed_at"),
+                created_at=_parse_dt(mr["created_at"]),
+                updated_at=_parse_dt(mr.get("updated_at")),
+                merged_at=_parse_dt(mr.get("merged_at")),
+                closed_at=_parse_dt(mr.get("closed_at")),
                 user_notes_count=mr.get("user_notes_count", 0),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
                     "state": mr["state"],
-                    "updated_at": mr.get("updated_at"),
-                    "merged_at": mr.get("merged_at"),
-                    "closed_at": mr.get("closed_at"),
+                    "updated_at": _parse_dt(mr.get("updated_at")),
+                    "merged_at": _parse_dt(mr.get("merged_at")),
+                    "closed_at": _parse_dt(mr.get("closed_at")),
                     "user_notes_count": mr.get("user_notes_count", 0),
                 },
             )
@@ -264,16 +283,16 @@ class SyncService:
                 title=issue["title"],
                 state=issue["state"],
                 labels=issue.get("labels"),
-                created_at=issue["created_at"],
-                updated_at=issue.get("updated_at"),
-                closed_at=issue.get("closed_at"),
+                created_at=_parse_dt(issue["created_at"]),
+                updated_at=_parse_dt(issue.get("updated_at")),
+                closed_at=_parse_dt(issue.get("closed_at")),
                 user_notes_count=issue.get("user_notes_count", 0),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
                     "state": issue["state"],
-                    "updated_at": issue.get("updated_at"),
-                    "closed_at": issue.get("closed_at"),
+                    "updated_at": _parse_dt(issue.get("updated_at")),
+                    "closed_at": _parse_dt(issue.get("closed_at")),
                     "user_notes_count": issue.get("user_notes_count", 0),
                     "labels": issue.get("labels"),
                 },
@@ -308,14 +327,14 @@ class SyncService:
                 ref=p.get("ref"),
                 sha=p.get("sha"),
                 duration=p.get("duration"),
-                created_at=p["created_at"],
-                finished_at=p.get("finished_at"),
+                created_at=_parse_dt(p["created_at"]),
+                finished_at=_parse_dt(p.get("finished_at")),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
                     "status": p["status"],
                     "duration": p.get("duration"),
-                    "finished_at": p.get("finished_at"),
+                    "finished_at": _parse_dt(p.get("finished_at")),
                 },
             )
             await self.session.execute(stmt)
@@ -347,7 +366,7 @@ class SyncService:
                 noteable_id=noteable_id,
                 body_length=len(n.get("body", "")),
                 system=n.get("system", False),
-                created_at=n["created_at"],
+                created_at=_parse_dt(n["created_at"]),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
@@ -378,7 +397,7 @@ class SyncService:
                 action_name=ev.get("action_name", "unknown"),
                 target_type=ev.get("target_type"),
                 target_id=ev.get("target_id"),
-                created_at=ev["created_at"],
+                created_at=_parse_dt(ev["created_at"]),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
