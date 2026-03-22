@@ -80,8 +80,8 @@ class GitLabClient:
         since: date | None = None,
         until: date | None = None,
     ) -> list[dict[str, Any]]:
-        """Получить коммиты проекта за период."""
-        params: dict[str, Any] = {"with_stats": "true"}
+        """Получить коммиты проекта за период (все ветки)."""
+        params: dict[str, Any] = {"with_stats": "true", "all": "true"}
         if since:
             params["since"] = since.isoformat()
         if until:
