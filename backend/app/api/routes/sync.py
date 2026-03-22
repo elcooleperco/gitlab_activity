@@ -4,12 +4,13 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, delete, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.db.models import SyncLog
+from app.db.models import SyncLog, Commit, MergeRequest, Issue, Note, Pipeline, Event
 from app.services.sync_service import SyncService
+from app.services.sync_state import sync_progress
 
 router = APIRouter(prefix="/sync", tags=["Синхронизация"])
 
@@ -83,3 +84,57 @@ async def get_sync_status(
         )
         for log in logs
     ]
+
+
+@router.get("/progress")
+async def get_sync_progress():
+    """Получить текущий прогресс синхронизации."""
+    return sync_progress.to_dict()
+
+
+@router.post("/cancel")
+async def cancel_sync():
+    """Отменить текущую синхронизацию."""
+    if not sync_progress.running:
+        return {"status": "not_running"}
+    sync_progress.cancel()
+    return {"status": "cancelling"}
+
+
+class PurgeRequest(BaseModel):
+    """Запрос на очистку данных за период."""
+    date_from: date
+    date_to: date
+
+
+@router.post("/purge")
+async def purge_data(
+    data: PurgeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить собранные данные за указанный период."""
+    d_from = data.date_from
+    d_to = data.date_to
+    deleted = {}
+
+    # Удаляем в порядке зависимостей (сначала дочерние таблицы)
+    for model, date_field, name in [
+        (Note, Note.created_at, "notes"),
+        (Event, Event.created_at, "events"),
+        (Pipeline, Pipeline.created_at, "pipelines"),
+        (Issue, Issue.created_at, "issues"),
+        (MergeRequest, MergeRequest.created_at, "merge_requests"),
+        (Commit, Commit.committed_at, "commits"),
+    ]:
+        result = await db.execute(
+            delete(model).where(
+                and_(
+                    func.date(date_field) >= d_from,
+                    func.date(date_field) <= d_to,
+                )
+            )
+        )
+        deleted[name] = result.rowcount
+
+    await db.commit()
+    return {"status": "ok", "deleted": deleted}

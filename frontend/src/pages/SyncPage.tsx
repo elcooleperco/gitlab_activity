@@ -1,10 +1,27 @@
-import { useState, useEffect } from 'react'
-import { Card, DatePicker, Button, Switch, Table, Tag, Space, message, Typography, Modal } from 'antd'
-import { SyncOutlined } from '@ant-design/icons'
+import { useState, useEffect, useRef } from 'react'
+import {
+  Card, DatePicker, Button, Switch, Table, Tag, Space, message,
+  Typography, Modal, Progress, Collapse, Steps,
+} from 'antd'
+import {
+  SyncOutlined, DeleteOutlined, StopOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined,
+  ClockCircleOutlined,
+} from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
-import { startSync, getSyncStatus } from '../api'
+import { startSync, getSyncStatus, getSyncProgress, cancelSync, purgeData } from '../api'
 
 const { RangePicker } = DatePicker
+
+/** Маппинг статуса шага → иконка */
+const stepIcon = (status: string) => {
+  switch (status) {
+    case 'completed': return <CheckCircleOutlined style={{ color: '#52c41a' }} />
+    case 'running': return <LoadingOutlined style={{ color: '#1890ff' }} />
+    case 'failed': return <CloseCircleOutlined style={{ color: '#f5222d' }} />
+    default: return <ClockCircleOutlined style={{ color: '#d9d9d9' }} />
+  }
+}
 
 export default function SyncPage() {
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
@@ -15,25 +32,71 @@ export default function SyncPage() {
   const [syncing, setSyncing] = useState(false)
   const [history, setHistory] = useState<any[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
+  const [purging, setPurging] = useState(false)
+
+  // Прогресс синхронизации
+  const [progress, setProgress] = useState<any>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadHistory()
+    // Проверим, не идёт ли уже синхронизация
+    checkRunning()
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
   }, [])
+
+  const checkRunning = async () => {
+    try {
+      const res = await getSyncProgress()
+      if (res.data.running) {
+        setSyncing(true)
+        setProgress(res.data)
+        startPolling()
+      }
+    } catch { /* ok */ }
+  }
+
+  const startPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await getSyncProgress()
+        setProgress(res.data)
+        if (!res.data.running) {
+          if (pollRef.current) clearInterval(pollRef.current)
+          pollRef.current = null
+          setSyncing(false)
+          loadHistory()
+          if (res.data.cancelled) {
+            message.warning('Синхронизация отменена')
+          } else {
+            message.success('Синхронизация завершена')
+          }
+        }
+      } catch { /* retry */ }
+    }, 1500)
+  }
+
+  // Автоскролл логов вниз
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [progress?.logs])
 
   const loadHistory = async () => {
     setLoadingHistory(true)
     try {
       const res = await getSyncStatus(20)
       setHistory(res.data)
-    } catch {
-      /* Ошибка */
-    } finally {
-      setLoadingHistory(false)
-    }
+    } catch { /* ошибка */ }
+    finally { setLoadingHistory(false) }
   }
 
   const handleSync = async () => {
     setSyncing(true)
+    setProgress(null)
     try {
       const res = await startSync({
         date_from: dateRange[0].format('YYYY-MM-DD'),
@@ -45,17 +108,24 @@ export default function SyncPage() {
       } else {
         message.success('Синхронизация запущена')
       }
-      /* Обновляем историю с задержкой */
-      setTimeout(loadHistory, 2000)
+      startPolling()
     } catch (err: any) {
+      setSyncing(false)
       const detail = err?.response?.data?.detail || err?.message || 'Неизвестная ошибка'
       Modal.error({
         title: 'Ошибка запуска синхронизации',
         content: <pre style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>{detail}</pre>,
         width: 600,
       })
-    } finally {
-      setSyncing(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    try {
+      await cancelSync()
+      message.info('Отправлен запрос на отмену...')
+    } catch (err: any) {
+      message.error('Ошибка отмены: ' + (err?.message || ''))
     }
   }
 
@@ -63,20 +133,20 @@ export default function SyncPage() {
     running: 'blue',
     completed: 'green',
     failed: 'red',
+    cancelled: 'orange',
   }
 
   const statusLabel: Record<string, string> = {
     running: 'Выполняется',
     completed: 'Завершена',
     failed: 'Ошибка',
+    cancelled: 'Отменена',
   }
 
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
     {
-      title: 'Статус',
-      dataIndex: 'status',
-      key: 'status',
+      title: 'Статус', dataIndex: 'status', key: 'status',
       render: (s: string) => <Tag color={statusColor[s]}>{statusLabel[s] || s}</Tag>,
     },
     { title: 'Период с', dataIndex: 'date_from', key: 'date_from' },
@@ -84,16 +154,11 @@ export default function SyncPage() {
     { title: 'Начало', dataIndex: 'started_at', key: 'started_at', render: (v: string) => v ? dayjs(v).format('DD.MM.YYYY HH:mm') : '—' },
     { title: 'Конец', dataIndex: 'finished_at', key: 'finished_at', render: (v: string) => v ? dayjs(v).format('DD.MM.YYYY HH:mm') : '—' },
     {
-      title: 'Загружено',
-      dataIndex: 'entities_synced',
-      key: 'entities',
+      title: 'Загружено', dataIndex: 'entities_synced', key: 'entities',
       render: (e: any) => e ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join(', ') : '—',
     },
     {
-      title: 'Ошибка',
-      dataIndex: 'error_message',
-      key: 'error',
-      width: 300,
+      title: 'Ошибка', dataIndex: 'error_message', key: 'error', width: 300,
       render: (text: string) => text ? (
         <Typography.Link onClick={() => Modal.error({
           title: 'Ошибка синхронизации',
@@ -120,16 +185,120 @@ export default function SyncPage() {
             <span>Принудительное обновление:</span>
             <Switch checked={forceUpdate} onChange={setForceUpdate} />
           </Space>
-          <Button
-            type="primary"
-            icon={<SyncOutlined spin={syncing} />}
-            onClick={handleSync}
-            loading={syncing}
-          >
-            Запустить синхронизацию
-          </Button>
+          <Space>
+            <Button
+              type="primary"
+              icon={<SyncOutlined spin={syncing} />}
+              onClick={handleSync}
+              loading={syncing}
+              disabled={syncing}
+            >
+              Запустить синхронизацию
+            </Button>
+            {syncing && (
+              <Button
+                danger
+                icon={<StopOutlined />}
+                onClick={handleCancel}
+              >
+                Остановить
+              </Button>
+            )}
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              loading={purging}
+              disabled={syncing}
+              onClick={() => {
+                Modal.confirm({
+                  title: 'Очистка данных',
+                  content: `Удалить все собранные данные за период ${dateRange[0].format('DD.MM.YYYY')} — ${dateRange[1].format('DD.MM.YYYY')}? Это действие необратимо.`,
+                  okText: 'Удалить',
+                  okType: 'danger',
+                  cancelText: 'Отмена',
+                  onOk: async () => {
+                    setPurging(true)
+                    try {
+                      const res = await purgeData({
+                        date_from: dateRange[0].format('YYYY-MM-DD'),
+                        date_to: dateRange[1].format('YYYY-MM-DD'),
+                      })
+                      const d = res.data.deleted || {}
+                      const total = Object.values(d).reduce((s: number, v: any) => s + (v as number), 0)
+                      message.success(`Удалено ${total} записей`)
+                    } catch (err: any) {
+                      message.error('Ошибка очистки: ' + (err?.response?.data?.detail || err?.message))
+                    } finally {
+                      setPurging(false)
+                    }
+                  },
+                })
+              }}
+            >
+              Очистить данные за период
+            </Button>
+          </Space>
         </Space>
       </Card>
+
+      {/* Прогресс синхронизации */}
+      {(syncing || (progress && progress.percent > 0)) && progress && (
+        <Card title="Прогресс синхронизации" style={{ marginBottom: 16 }}>
+          <Progress
+            percent={progress.percent}
+            status={progress.cancelled ? 'exception' : progress.running ? 'active' : 'success'}
+            strokeColor={progress.cancelled ? '#faad14' : undefined}
+          />
+          <div style={{ marginTop: 16, marginBottom: 16 }}>
+            <Typography.Text strong>Текущий шаг: </Typography.Text>
+            <Typography.Text>{progress.current_step || '—'}</Typography.Text>
+          </div>
+
+          {/* План шагов */}
+          <Collapse
+            defaultActiveKey={['plan']}
+            items={[
+              {
+                key: 'plan',
+                label: 'План синхронизации',
+                children: (
+                  <Steps
+                    direction="vertical"
+                    size="small"
+                    current={-1}
+                    items={progress.steps?.map((s: any) => ({
+                      title: s.name,
+                      status: s.status === 'completed' ? 'finish' as const
+                        : s.status === 'running' ? 'process' as const
+                        : s.status === 'failed' ? 'error' as const
+                        : 'wait' as const,
+                      icon: stepIcon(s.status),
+                    })) || []}
+                  />
+                ),
+              },
+              {
+                key: 'logs',
+                label: `Лог операций (${progress.logs?.length || 0})`,
+                children: (
+                  <div style={{
+                    maxHeight: 300, overflow: 'auto',
+                    background: '#1e1e1e', color: '#d4d4d4',
+                    padding: '8px 12px', borderRadius: 4,
+                    fontFamily: 'monospace', fontSize: 12,
+                    lineHeight: '1.6',
+                  }}>
+                    {progress.logs?.map((line: string, i: number) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                    <div ref={logsEndRef} />
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Card title="История синхронизаций">
         <Button onClick={loadHistory} style={{ marginBottom: 8 }}>Обновить</Button>

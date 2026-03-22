@@ -22,7 +22,7 @@ def _parse_dt(value) -> Optional[datetime]:
         except ValueError:
             return None
     return None
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,7 @@ from app.db.models import (
     Issue, Note, Pipeline, Event, SyncLog,
 )
 from app.services.gitlab_client import GitLabClient
+from app.services.sync_state import sync_progress
 
 logger = structlog.get_logger()
 
@@ -43,6 +44,11 @@ class SyncService:
         self.client = client or GitLabClient()
         self.counters: dict[str, int] = {}
 
+    def _check_cancelled(self) -> None:
+        """Проверить запрос отмены и прервать если нужно."""
+        if sync_progress.cancelled:
+            raise RuntimeError("Синхронизация отменена пользователем")
+
     async def sync_all(
         self,
         date_from: date,
@@ -50,6 +56,8 @@ class SyncService:
         force: bool = False,
     ) -> SyncLog:
         """Запустить полную синхронизацию за указанный период."""
+        sync_progress.reset()
+
         log = SyncLog(
             started_at=datetime.now(timezone.utc),
             date_from=date_from,
@@ -59,42 +67,165 @@ class SyncService:
         self.session.add(log)
         await self.session.commit()
 
+        # Формируем план
+        sync_progress.steps = []
+        for name in ["Загрузка пользователей", "Загрузка проектов",
+                      "Коммиты по проектам", "Merge Requests", "Issues",
+                      "Пайплайны", "События пользователей", "Привязка коммитов"]:
+            from app.services.sync_state import SyncStep
+            sync_progress.steps.append(SyncStep(name=name))
+
         try:
+            # Шаг 1: Пользователи
+            sync_progress.set_step("Загрузка пользователей")
+            sync_progress.add_log("Загрузка списка пользователей из GitLab...")
             await self.sync_users()
+            sync_progress.complete_step("Загрузка пользователей")
+            sync_progress.percent = 5
+            self._check_cancelled()
+
+            # Шаг 2: Проекты
+            sync_progress.set_step("Загрузка проектов")
+            sync_progress.add_log("Загрузка списка проектов из GitLab...")
             await self.sync_projects()
+            sync_progress.complete_step("Загрузка проектов")
+            sync_progress.percent = 10
+            self._check_cancelled()
 
-            # Получаем список проектов для синхронизации содержимого
-            result = await self.session.execute(select(GitlabProject.id))
-            project_ids = [row[0] for row in result.fetchall()]
+            # Получаем список проектов
+            result = await self.session.execute(select(GitlabProject.id, GitlabProject.path_with_namespace))
+            projects = result.fetchall()
+            project_ids = [row[0] for row in projects]
+            project_names = {row[0]: row[1] for row in projects}
+            total_projects = len(project_ids)
 
-            for project_id in project_ids:
-                await self.sync_project_commits(project_id, date_from, date_to)
-                await self.sync_project_merge_requests(project_id, date_from, date_to)
-                await self.sync_project_issues(project_id, date_from, date_to)
-                await self.sync_project_pipelines(project_id, date_from, date_to)
+            # Шаг 3: Коммиты
+            sync_progress.set_step("Коммиты по проектам")
+            for i, pid in enumerate(project_ids):
+                self._check_cancelled()
+                pname = project_names.get(pid, str(pid))
+                sync_progress.add_log(f"Коммиты: {pname} ({i+1}/{total_projects})")
+                sync_progress.percent = 10 + (i / max(total_projects, 1)) * 15
+                await self.sync_project_commits(pid, date_from, date_to)
+            sync_progress.complete_step("Коммиты по проектам")
+            sync_progress.percent = 25
 
-            # Синхронизируем события пользователей
-            user_result = await self.session.execute(select(GitlabUser.id))
-            user_ids = [row[0] for row in user_result.fetchall()]
+            # Шаг 4: MR
+            sync_progress.set_step("Merge Requests")
+            for i, pid in enumerate(project_ids):
+                self._check_cancelled()
+                pname = project_names.get(pid, str(pid))
+                sync_progress.add_log(f"MR: {pname} ({i+1}/{total_projects})")
+                sync_progress.percent = 25 + (i / max(total_projects, 1)) * 15
+                await self.sync_project_merge_requests(pid, date_from, date_to)
+            sync_progress.complete_step("Merge Requests")
+            sync_progress.percent = 40
 
-            for user_id in user_ids:
-                await self.sync_user_events(user_id, date_from, date_to)
+            # Шаг 5: Issues
+            sync_progress.set_step("Issues")
+            for i, pid in enumerate(project_ids):
+                self._check_cancelled()
+                pname = project_names.get(pid, str(pid))
+                sync_progress.add_log(f"Issues: {pname} ({i+1}/{total_projects})")
+                sync_progress.percent = 40 + (i / max(total_projects, 1)) * 15
+                await self.sync_project_issues(pid, date_from, date_to)
+            sync_progress.complete_step("Issues")
+            sync_progress.percent = 55
+
+            # Шаг 6: Пайплайны
+            sync_progress.set_step("Пайплайны")
+            for i, pid in enumerate(project_ids):
+                self._check_cancelled()
+                pname = project_names.get(pid, str(pid))
+                sync_progress.add_log(f"Пайплайны: {pname} ({i+1}/{total_projects})")
+                sync_progress.percent = 55 + (i / max(total_projects, 1)) * 15
+                await self.sync_project_pipelines(pid, date_from, date_to)
+            sync_progress.complete_step("Пайплайны")
+            sync_progress.percent = 70
+
+            # Шаг 7: События пользователей
+            sync_progress.set_step("События пользователей")
+            user_result = await self.session.execute(select(GitlabUser.id, GitlabUser.username))
+            users = user_result.fetchall()
+            total_users = len(users)
+
+            for i, (uid, uname) in enumerate(users):
+                self._check_cancelled()
+                sync_progress.add_log(f"События: @{uname} ({i+1}/{total_users})")
+                sync_progress.percent = 70 + (i / max(total_users, 1)) * 20
+                await self.sync_user_events(uid, date_from, date_to)
+            sync_progress.complete_step("События пользователей")
+            sync_progress.percent = 90
+
+            # Шаг 8: Привязка коммитов
+            sync_progress.set_step("Привязка коммитов")
+            sync_progress.add_log("Привязка осиротевших коммитов к пользователям...")
+            await self._fix_orphaned_commits()
+            sync_progress.complete_step("Привязка коммитов")
 
             log.status = "completed"
             log.entities_synced = self.counters
             log.finished_at = datetime.now(timezone.utc)
             await self.session.commit()
 
+            sync_progress.add_log(f"Синхронизация завершена: {self.counters}")
+            sync_progress.finish()
             logger.info("Синхронизация завершена", counters=self.counters)
             return log
 
         except Exception as e:
-            log.status = "failed"
+            log.status = "failed" if not sync_progress.cancelled else "cancelled"
             log.error_message = str(e)
             log.finished_at = datetime.now(timezone.utc)
             await self.session.commit()
+
+            sync_progress.add_log(f"Ошибка: {e}")
+            sync_progress.finish()
             logger.error("Ошибка синхронизации", error=str(e))
-            raise
+            if not sync_progress.cancelled:
+                raise
+
+    async def _fix_orphaned_commits(self) -> None:
+        """Привязать коммиты без user_id к пользователям через различные маппинги."""
+        from sqlalchemy import update
+
+        # 1. Маппинг: username/name -> user_id (lower case)
+        result = await self.session.execute(
+            select(GitlabUser.id, GitlabUser.username, GitlabUser.name, GitlabUser.email)
+        )
+        users = result.fetchall()
+
+        fixed = 0
+        for user in users:
+            # Обновляем коммиты где author_name совпадает с username или name (case-insensitive)
+            names_to_try = set()
+            if user.username:
+                names_to_try.add(user.username.lower())
+            if user.name:
+                names_to_try.add(user.name.lower())
+
+            for name in names_to_try:
+                res = await self.session.execute(
+                    update(Commit)
+                    .where(Commit.user_id.is_(None))
+                    .where(func.lower(Commit.author_name) == name)
+                    .values(user_id=user.id)
+                )
+                fixed += res.rowcount
+
+            # Обновляем по email (дополнительные email — в git может быть локальный email)
+            if user.email:
+                res = await self.session.execute(
+                    update(Commit)
+                    .where(Commit.user_id.is_(None))
+                    .where(func.lower(Commit.author_email) == user.email.lower())
+                    .values(user_id=user.id)
+                )
+                fixed += res.rowcount
+
+        await self.session.commit()
+        if fixed:
+            logger.info("Привязано осиротевших коммитов", count=fixed)
 
     async def sync_users(self) -> None:
         """Синхронизировать пользователей."""
@@ -439,6 +570,22 @@ class SyncService:
             )
             await self.session.execute(stmt)
             count += 1
+
+        # Привязка коммитов к пользователям через push-события
+        # Если у коммита нет user_id, но push-событие знает кто пушил — обновляем
+        push_shas = [
+            ev.get("push_data", {}).get("commit_to")
+            for ev in events_data
+            if ev.get("push_data", {}).get("commit_to")
+        ]
+        if push_shas:
+            from sqlalchemy import update
+            await self.session.execute(
+                update(Commit)
+                .where(Commit.sha.in_(push_shas))
+                .where(Commit.user_id.is_(None))
+                .values(user_id=user_id)
+            )
 
         await self.session.commit()
         self.counters["events"] = self.counters.get("events", 0) + count

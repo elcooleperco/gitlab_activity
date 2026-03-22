@@ -12,6 +12,10 @@ export const testConnection = () => api.get('/settings/test')
 export const startSync = (data: { date_from: string; date_to: string; force_update?: boolean }) =>
   api.post('/sync/start', data)
 export const getSyncStatus = (limit = 10) => api.get('/sync/status', { params: { limit } })
+export const getSyncProgress = () => api.get('/sync/progress')
+export const cancelSync = () => api.post('/sync/cancel')
+export const purgeData = (data: { date_from: string; date_to: string }) =>
+  api.post('/sync/purge', data)
 
 /** Пользователи */
 export const getUsers = (search?: string) => api.get('/users', { params: { search } })

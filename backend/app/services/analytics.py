@@ -393,6 +393,15 @@ class AnalyticsService:
         events_q = select(func.count()).where(and_(Event.user_id == user_id, func.date(Event.created_at) >= date_from, func.date(Event.created_at) <= date_to))
         events_count = (await self.session.execute(events_q)).scalar() or 0
 
+        # Approve-события (approved MR)
+        approves_q = select(func.count()).where(and_(
+            Event.user_id == user_id,
+            Event.action_name == "approved",
+            func.date(Event.created_at) >= date_from,
+            func.date(Event.created_at) <= date_to,
+        ))
+        approves_count = (await self.session.execute(approves_q)).scalar() or 0
+
         total_score = (
             (commits.count or 0) * 3
             + mr_created * 5
@@ -401,6 +410,7 @@ class AnalyticsService:
             + issues_closed * 3
             + notes_count * 1
             + (pipelines.total or 0) * 1
+            + approves_count * 4
         )
 
         return {
@@ -415,6 +425,7 @@ class AnalyticsService:
             "pipelines_total": pipelines.total or 0,
             "pipelines_success": pipelines.success or 0,
             "events": events_count,
+            "approves": approves_count,
             "total_score": total_score,
         }
 

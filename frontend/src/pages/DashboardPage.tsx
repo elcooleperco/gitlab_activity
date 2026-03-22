@@ -111,6 +111,7 @@ export default function DashboardPage() {
     { title: 'MR', dataIndex: 'mr_created', sorter: (a: any, b: any) => a.mr_created - b.mr_created },
     { title: 'Issues', dataIndex: 'issues_created', sorter: (a: any, b: any) => a.issues_created - b.issues_created },
     { title: 'Комменты', dataIndex: 'notes', sorter: (a: any, b: any) => a.notes - b.notes },
+    { title: 'Approve', dataIndex: 'approves', sorter: (a: any, b: any) => (a.approves || 0) - (b.approves || 0) },
     { title: 'Балл', dataIndex: 'total_score', sorter: (a: any, b: any) => a.total_score - b.total_score, defaultSortOrder: 'descend' as const },
   ]
 
