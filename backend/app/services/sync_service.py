@@ -119,7 +119,7 @@ class SyncService:
 
             # Шаги 3-6: данные по проектам, по неделям
             project_steps = [
-                ("Коммиты", "commits", Commit, self.sync_project_commits),
+                ("Коммиты по проектам", "commits", Commit, self.sync_project_commits),
                 ("Merge Requests", "merge_requests", MergeRequest, self.sync_project_merge_requests),
                 ("Issues", "issues", Issue, self.sync_project_issues),
                 ("Пайплайны", "pipelines", Pipeline, self.sync_project_pipelines),
