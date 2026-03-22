@@ -1,5 +1,6 @@
 """Клиент для работы с GitLab REST API v4."""
 
+import asyncio
 from datetime import date
 from typing import Any
 
@@ -9,6 +10,11 @@ import structlog
 from app.core.config import settings
 
 logger = structlog.get_logger()
+
+# Настройки retry
+MAX_RETRIES = 2
+RETRY_DELAY = 3  # секунд
+REQUEST_TIMEOUT = 60.0  # секунд на запрос
 
 
 class GitLabClient:
@@ -20,6 +26,34 @@ class GitLabClient:
         self.api_url = f"{self.base_url}/api/v4"
         self.headers = {"PRIVATE-TOKEN": self.token}
 
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """HTTP-запрос с retry при таймауте/ошибке сети."""
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await client.request(
+                    method, url, headers=self.headers, params=params
+                )
+                response.raise_for_status()
+                return response
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        "Retry запроса к GitLab",
+                        url=url, attempt=attempt + 1, error=str(e)
+                    )
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                else:
+                    raise
+        raise last_error  # type: ignore
+
     async def _request(
         self,
         method: str,
@@ -28,11 +62,8 @@ class GitLabClient:
     ) -> Any:
         """Выполнить HTTP-запрос к GitLab API."""
         url = f"{self.api_url}{path}"
-        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-            response = await client.request(
-                method, url, headers=self.headers, params=params
-            )
-            response.raise_for_status()
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, verify=False) as client:
+            response = await self._request_with_retry(client, method, url, params)
             return response.json()
 
     async def _get_all_pages(
@@ -41,22 +72,20 @@ class GitLabClient:
         params: dict[str, Any] | None = None,
         max_pages: int = 100,
     ) -> list[dict[str, Any]]:
-        """Получить все страницы результатов с пагинацией."""
+        """Получить все страницы результатов с пагинацией и retry."""
         params = params or {}
         params.setdefault("per_page", 100)
         all_items: list[dict[str, Any]] = []
 
-        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, verify=False) as client:
             for page in range(1, max_pages + 1):
                 params["page"] = page
                 url = f"{self.api_url}{path}"
-                response = await client.get(url, headers=self.headers, params=params)
-                response.raise_for_status()
+                response = await self._request_with_retry(client, "GET", url, params)
                 items = response.json()
                 if not items:
                     break
                 all_items.extend(items)
-                # Если получили меньше элементов чем per_page — это последняя страница
                 if len(items) < params["per_page"]:
                     break
 

@@ -1,6 +1,6 @@
 """Сервис синхронизации данных из GitLab в локальную БД."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -48,6 +48,17 @@ class SyncService:
         """Проверить запрос отмены и прервать если нужно."""
         if sync_progress.cancelled:
             raise RuntimeError("Синхронизация отменена пользователем")
+
+    @staticmethod
+    def _week_chunks(d_from: date, d_to: date) -> list[tuple[date, date]]:
+        """Разбить период на недельные чанки."""
+        chunks = []
+        cur = d_from
+        while cur <= d_to:
+            chunk_end = min(cur + timedelta(days=6), d_to)
+            chunks.append((cur, chunk_end))
+            cur = chunk_end + timedelta(days=1)
+        return chunks
 
     async def sync_all(
         self,
@@ -101,82 +112,99 @@ class SyncService:
             project_names = {row[0]: row[1] for row in projects}
             total_projects = len(project_ids)
 
-            # Шаг 3: Коммиты
-            sync_progress.set_step("Коммиты по проектам")
-            before_commits = await self._count_rows(Commit)
-            for i, pid in enumerate(project_ids):
-                self._check_cancelled()
-                pname = project_names.get(pid, str(pid))
-                sync_progress.add_log(f"Коммиты: {pname} ({i+1}/{total_projects})")
-                sync_progress.percent = 10 + (i / max(total_projects, 1)) * 15
-                await self.sync_project_commits(pid, date_from, date_to)
-            after_commits = await self._count_rows(Commit)
-            step_total = self.counters.get("commits", 0)
-            step_new = after_commits - before_commits
-            sync_progress.add_to_step("Коммиты по проектам", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
-            sync_progress.complete_step("Коммиты по проектам")
-            sync_progress.percent = 25
+            # Разбиваем период на недельные чанки
+            chunks = self._week_chunks(date_from, date_to)
+            total_chunks = len(chunks)
+            sync_progress.add_log(f"Период разбит на {total_chunks} нед. чанков")
 
-            # Шаг 4: MR
-            sync_progress.set_step("Merge Requests")
-            before_mr = await self._count_rows(MergeRequest)
-            for i, pid in enumerate(project_ids):
-                self._check_cancelled()
-                pname = project_names.get(pid, str(pid))
-                sync_progress.add_log(f"MR: {pname} ({i+1}/{total_projects})")
-                sync_progress.percent = 25 + (i / max(total_projects, 1)) * 15
-                await self.sync_project_merge_requests(pid, date_from, date_to)
-            after_mr = await self._count_rows(MergeRequest)
-            step_total = self.counters.get("merge_requests", 0)
-            step_new = after_mr - before_mr
-            sync_progress.add_to_step("Merge Requests", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
-            sync_progress.complete_step("Merge Requests")
-            sync_progress.percent = 40
+            # Шаги 3-6: данные по проектам, по неделям
+            project_steps = [
+                ("Коммиты", "commits", Commit, self.sync_project_commits),
+                ("Merge Requests", "merge_requests", MergeRequest, self.sync_project_merge_requests),
+                ("Issues", "issues", Issue, self.sync_project_issues),
+                ("Пайплайны", "pipelines", Pipeline, self.sync_project_pipelines),
+            ]
 
-            # Шаг 5: Issues
-            sync_progress.set_step("Issues")
-            before_issues = await self._count_rows(Issue)
-            for i, pid in enumerate(project_ids):
-                self._check_cancelled()
-                pname = project_names.get(pid, str(pid))
-                sync_progress.add_log(f"Issues: {pname} ({i+1}/{total_projects})")
-                sync_progress.percent = 40 + (i / max(total_projects, 1)) * 15
-                await self.sync_project_issues(pid, date_from, date_to)
-            after_issues = await self._count_rows(Issue)
-            step_total = self.counters.get("issues", 0)
-            step_new = after_issues - before_issues
-            sync_progress.add_to_step("Issues", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
-            sync_progress.complete_step("Issues")
-            sync_progress.percent = 55
+            for step_idx, (step_name, counter_key, model, sync_fn) in enumerate(project_steps):
+                sync_progress.set_step(step_name)
+                before = await self._count_rows(model)
+                base_pct = 10 + step_idx * 15
+                total_ops = total_projects * total_chunks
 
-            # Шаг 6: Пайплайны
-            sync_progress.set_step("Пайплайны")
-            before_pipes = await self._count_rows(Pipeline)
-            for i, pid in enumerate(project_ids):
-                self._check_cancelled()
-                pname = project_names.get(pid, str(pid))
-                sync_progress.add_log(f"Пайплайны: {pname} ({i+1}/{total_projects})")
-                sync_progress.percent = 55 + (i / max(total_projects, 1)) * 15
-                await self.sync_project_pipelines(pid, date_from, date_to)
-            after_pipes = await self._count_rows(Pipeline)
-            step_total = self.counters.get("pipelines", 0)
-            step_new = after_pipes - before_pipes
-            sync_progress.add_to_step("Пайплайны", total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
-            sync_progress.complete_step("Пайплайны")
+                op = 0
+                for ci, (ch_from, ch_to) in enumerate(chunks):
+                    for pi, pid in enumerate(project_ids):
+                        self._check_cancelled()
+                        pname = project_names.get(pid, str(pid))
+                        sync_progress.add_log(
+                            f"{step_name}: {pname} [{ch_from}—{ch_to}] ({op+1}/{total_ops})"
+                        )
+                        sync_progress.percent = base_pct + (op / max(total_ops, 1)) * 15
+                        try:
+                            await sync_fn(pid, ch_from, ch_to)
+                        except Exception as chunk_err:
+                            # Fallback: разбиваем неделю на дни и пробуем по дням
+                            if ch_from != ch_to:
+                                sync_progress.add_log(
+                                    f"⚠ Таймаут на неделе, перехожу на дни: {pname}"
+                                )
+                                day_chunks = self._week_chunks(ch_from, ch_to)
+                                # _week_chunks с 1 днём вернёт [(d, d)]
+                                cur_day = ch_from
+                                while cur_day <= ch_to:
+                                    self._check_cancelled()
+                                    try:
+                                        sync_progress.add_log(
+                                            f"  {step_name}: {pname} [{cur_day}]"
+                                        )
+                                        await sync_fn(pid, cur_day, cur_day)
+                                    except Exception as day_err:
+                                        sync_progress.add_log(
+                                            f"  ✗ Ошибка за {cur_day}: {day_err}"
+                                        )
+                                        logger.warning(
+                                            "Ошибка синхронизации за день",
+                                            step=step_name, project=pname,
+                                            date=str(cur_day), error=str(day_err),
+                                        )
+                                    cur_day += timedelta(days=1)
+                            else:
+                                sync_progress.add_log(
+                                    f"✗ Ошибка: {pname} [{ch_from}]: {chunk_err}"
+                                )
+                                logger.warning(
+                                    "Ошибка синхронизации",
+                                    step=step_name, project=pname, error=str(chunk_err),
+                                )
+                        op += 1
+
+                after = await self._count_rows(model)
+                step_total = self.counters.get(counter_key, 0)
+                step_new = after - before
+                sync_progress.add_to_step(step_name, total=step_total, new=max(step_new, 0), updated=max(step_total - step_new, 0))
+                sync_progress.complete_step(step_name)
+
             sync_progress.percent = 70
 
-            # Шаг 7: События пользователей
+            # Шаг 7: События пользователей (тоже по неделям)
             sync_progress.set_step("События пользователей")
             before_events = await self._count_rows(Event)
             user_result = await self.session.execute(select(GitlabUser.id, GitlabUser.username))
             users = user_result.fetchall()
             total_users = len(users)
+            total_user_ops = total_users * total_chunks
 
-            for i, (uid, uname) in enumerate(users):
-                self._check_cancelled()
-                sync_progress.add_log(f"События: @{uname} ({i+1}/{total_users})")
-                sync_progress.percent = 70 + (i / max(total_users, 1)) * 20
-                await self.sync_user_events(uid, date_from, date_to)
+            op = 0
+            for ci, (ch_from, ch_to) in enumerate(chunks):
+                for i, (uid, uname) in enumerate(users):
+                    self._check_cancelled()
+                    sync_progress.add_log(
+                        f"События: @{uname} [{ch_from}—{ch_to}] ({op+1}/{total_user_ops})"
+                    )
+                    sync_progress.percent = 70 + (op / max(total_user_ops, 1)) * 20
+                    await self.sync_user_events(uid, ch_from, ch_to)
+                    op += 1
+
             after_events = await self._count_rows(Event)
             step_total = self.counters.get("events", 0)
             step_new = after_events - before_events
