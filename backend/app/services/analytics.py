@@ -1,6 +1,6 @@
 """Сервис аналитики — расчёт метрик и формирование отчётов."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select, func, case, and_, or_, union_all, literal, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -817,3 +817,142 @@ class AnalyticsService:
         # Сортируем по дате (новые сверху)
         actions.sort(key=lambda a: a.get("date") or "", reverse=True)
         return actions
+
+    async def get_workday_stats(
+        self,
+        date_from: date,
+        date_to: date,
+        work_days: list[int] | None = None,
+    ) -> list[dict]:
+        """
+        Аналитика по рабочим/нерабочим дням для каждого активного пользователя.
+
+        work_days — список номеров дней недели (1=пн ... 7=вс), по умолчанию пн-пт.
+
+        Возвращает для каждого пользователя:
+        - work_days_total / off_days_total — всего рабочих/нерабочих дней в периоде
+        - work_days_active / work_days_inactive — рабочие дни с/без активности
+        - off_days_active / off_days_inactive — нерабочие дни с/без активности
+        - last_activity_date — дата последней активности из ВСЕЙ базы
+        """
+        if work_days is None:
+            work_days = [1, 2, 3, 4, 5]
+
+        # Считаем количество рабочих/нерабочих дней в периоде
+        all_days: list[date] = []
+        d = date_from
+        while d <= date_to:
+            all_days.append(d)
+            d += timedelta(days=1)
+
+        work_dates = set(d for d in all_days if d.isoweekday() in work_days)
+        off_dates = set(d for d in all_days if d.isoweekday() not in work_days)
+        work_days_total = len(work_dates)
+        off_days_total = len(off_dates)
+
+        # Получаем множество дат активности для каждого пользователя
+        # Объединяем все таблицы с активностями
+        activity_dates_q = union_all(
+            select(Commit.user_id.label("user_id"), func.date(Commit.committed_at).label("dt"))
+            .where(and_(
+                Commit.user_id.isnot(None),
+                func.date(Commit.committed_at) >= date_from,
+                func.date(Commit.committed_at) <= date_to,
+            )),
+            select(MergeRequest.author_id.label("user_id"), func.date(MergeRequest.created_at).label("dt"))
+            .where(and_(
+                MergeRequest.author_id.isnot(None),
+                func.date(MergeRequest.created_at) >= date_from,
+                func.date(MergeRequest.created_at) <= date_to,
+            )),
+            select(Issue.author_id.label("user_id"), func.date(Issue.created_at).label("dt"))
+            .where(and_(
+                Issue.author_id.isnot(None),
+                func.date(Issue.created_at) >= date_from,
+                func.date(Issue.created_at) <= date_to,
+            )),
+            select(Note.author_id.label("user_id"), func.date(Note.created_at).label("dt"))
+            .where(and_(
+                Note.author_id.isnot(None),
+                Note.system.is_(False),
+                func.date(Note.created_at) >= date_from,
+                func.date(Note.created_at) <= date_to,
+            )),
+            select(Event.user_id.label("user_id"), func.date(Event.created_at).label("dt"))
+            .where(and_(
+                Event.user_id.isnot(None),
+                func.date(Event.created_at) >= date_from,
+                func.date(Event.created_at) <= date_to,
+            )),
+        ).subquery("all_activity")
+
+        # Уникальные даты активности по пользователю
+        uniq_q = select(
+            activity_dates_q.c.user_id,
+            activity_dates_q.c.dt,
+        ).distinct()
+        result = await self.session.execute(uniq_q)
+        user_active_dates: dict[int, set[date]] = {}
+        for row in result.fetchall():
+            uid = row[0]
+            dt = row[1]
+            if uid not in user_active_dates:
+                user_active_dates[uid] = set()
+            user_active_dates[uid].add(dt)
+
+        # Последняя активность из ВСЕЙ базы (не ограничиваясь периодом)
+        last_activity_q = union_all(
+            select(Commit.user_id.label("user_id"), func.max(Commit.committed_at).label("last_dt"))
+            .where(Commit.user_id.isnot(None)).group_by(Commit.user_id),
+            select(MergeRequest.author_id.label("user_id"), func.max(MergeRequest.created_at).label("last_dt"))
+            .where(MergeRequest.author_id.isnot(None)).group_by(MergeRequest.author_id),
+            select(Issue.author_id.label("user_id"), func.max(Issue.created_at).label("last_dt"))
+            .where(Issue.author_id.isnot(None)).group_by(Issue.author_id),
+            select(Note.author_id.label("user_id"), func.max(Note.created_at).label("last_dt"))
+            .where(and_(Note.author_id.isnot(None), Note.system.is_(False))).group_by(Note.author_id),
+            select(Event.user_id.label("user_id"), func.max(Event.created_at).label("last_dt"))
+            .where(Event.user_id.isnot(None)).group_by(Event.user_id),
+        ).subquery("last_act")
+
+        last_q = select(
+            last_activity_q.c.user_id,
+            func.max(last_activity_q.c.last_dt).label("last_dt"),
+        ).group_by(last_activity_q.c.user_id)
+        last_result = await self.session.execute(last_q)
+        user_last_activity: dict[int, str] = {}
+        for row in last_result.fetchall():
+            dt_val = row[1]
+            if dt_val:
+                user_last_activity[row[0]] = dt_val.isoformat() if hasattr(dt_val, 'isoformat') else str(dt_val)
+
+        # Пользователи
+        users_result = await self.session.execute(select(GitlabUser))
+        users = users_result.scalars().all()
+
+        result_list = []
+        for u in users:
+            active_dates = user_active_dates.get(u.id, set())
+            if not active_dates:
+                # Нет активности за период — не включаем (только активные)
+                continue
+
+            work_active = len(active_dates & work_dates)
+            off_active = len(active_dates & off_dates)
+
+            result_list.append({
+                "user_id": u.id,
+                "username": u.username,
+                "name": u.name or u.username,
+                "work_days_total": work_days_total,
+                "off_days_total": off_days_total,
+                "work_days_active": work_active,
+                "work_days_inactive": work_days_total - work_active,
+                "off_days_active": off_active,
+                "off_days_inactive": off_days_total - off_active,
+                "total_active_days": len(active_dates),
+                "last_activity_date": user_last_activity.get(u.id),
+            })
+
+        # Сортировка по убыванию рабочих дней с активностью
+        result_list.sort(key=lambda x: x["work_days_active"], reverse=True)
+        return result_list

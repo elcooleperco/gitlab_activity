@@ -1,9 +1,16 @@
-"""API настроек подключения к GitLab."""
+"""API настроек подключения к GitLab и UI-предпочтений."""
 
-from fastapi import APIRouter
+import json
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_db
 from app.core.config import settings
+from app.db.models import AppSetting
 from app.services.gitlab_client import GitLabClient
 
 router = APIRouter(prefix="/settings", tags=["Настройки"])
@@ -65,3 +72,35 @@ async def test_connection():
             success=False,
             message=f"Ошибка подключения: {str(e)}",
         )
+
+
+UI_PREFS_KEY = "ui_preferences"
+
+
+@router.get("/preferences")
+async def get_preferences(db: AsyncSession = Depends(get_db)):
+    """Получить сохранённые UI-предпочтения (периоды и т.д.)."""
+    result = await db.execute(
+        select(AppSetting.value).where(AppSetting.key == UI_PREFS_KEY)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        try:
+            return json.loads(row)
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+@router.put("/preferences")
+async def save_preferences(data: dict, db: AsyncSession = Depends(get_db)):
+    """Сохранить UI-предпочтения."""
+    value = json.dumps(data, ensure_ascii=False)
+    stmt = pg_insert(AppSetting).values(
+        key=UI_PREFS_KEY, value=value
+    ).on_conflict_do_update(
+        index_elements=["key"], set_={"value": value}
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"status": "ok"}

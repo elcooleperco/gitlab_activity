@@ -7,6 +7,8 @@ export const getSettings = () => api.get('/settings')
 export const updateSettings = (data: { gitlab_url?: string; gitlab_token?: string }) =>
   api.put('/settings', data)
 export const testConnection = () => api.get('/settings/test')
+export const getPreferences = () => api.get('/settings/preferences')
+export const savePreferences = (data: Record<string, any>) => api.put('/settings/preferences', data)
 
 /** Синхронизация */
 export const startSync = (data: { date_from: string; date_to: string; force_update?: boolean }) =>
@@ -59,6 +61,10 @@ export const getUserActivityLog = (
 /** Аналитика — проекты */
 export const getProjectSummary = (projectId: number, dateFrom: string, dateTo: string) =>
   api.get(`/analytics/project-summary/${projectId}`, { params: { date_from: dateFrom, date_to: dateTo } })
+
+/** Аналитика — рабочие/нерабочие дни */
+export const getWorkdayStats = (dateFrom: string, dateTo: string, workDays: number[] = [1,2,3,4,5]) =>
+  api.get('/analytics/workday-stats', { params: { date_from: dateFrom, date_to: dateTo, work_days: workDays.join(',') } })
 
 /** Экспорт */
 export const exportSummaryCsv = (dateFrom: string, dateTo: string) =>

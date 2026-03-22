@@ -6,6 +6,7 @@ import {
   ProjectOutlined,
   SettingOutlined,
   SyncOutlined,
+  CalendarOutlined,
 } from '@ant-design/icons'
 import DashboardPage from './pages/DashboardPage'
 import UsersPage from './pages/UsersPage'
@@ -14,6 +15,7 @@ import ProjectsPage from './pages/ProjectsPage'
 import ProjectDetailPage from './pages/ProjectDetailPage'
 import SyncPage from './pages/SyncPage'
 import SettingsPage from './pages/SettingsPage'
+import WorkdayStatsPage from './pages/WorkdayStatsPage'
 
 const { Header, Content, Sider } = Layout
 
@@ -22,6 +24,7 @@ const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: <Link to="/">Дашборд</Link> },
   { key: '/users', icon: <UserOutlined />, label: <Link to="/users">Пользователи</Link> },
   { key: '/projects', icon: <ProjectOutlined />, label: <Link to="/projects">Проекты</Link> },
+  { key: '/workdays', icon: <CalendarOutlined />, label: <Link to="/workdays">Рабочие дни</Link> },
   { key: '/sync', icon: <SyncOutlined />, label: <Link to="/sync">Синхронизация</Link> },
   { key: '/settings', icon: <SettingOutlined />, label: <Link to="/settings">Настройки</Link> },
 ]
@@ -56,6 +59,7 @@ export default function App() {
             <Route path="/users/:id" element={<UserDetailPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/:id" element={<ProjectDetailPage />} />
+            <Route path="/workdays" element={<WorkdayStatsPage />} />
             <Route path="/sync" element={<SyncPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

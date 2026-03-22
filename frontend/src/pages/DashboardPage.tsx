@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Card, Col, Row, Statistic, DatePicker, Space, Table, Spin, Empty, Button, Select, Tabs, Tag, Switch } from 'antd'
-import dayjs, { Dayjs } from 'dayjs'
+import dayjs from 'dayjs'
 import { getSummary, getDailyActivity, getUsers, exportSummaryCsv } from '../api'
 import ToggleBarChart from '../components/ToggleBarChart'
 import ToggleLineChart from '../components/ToggleLineChart'
 import { Link } from 'react-router-dom'
 import ExportButtons from '../components/ExportButtons'
+import usePersistedDateRange from '../hooks/usePersistedDateRange'
 
 const { RangePicker } = DatePicker
 
@@ -13,10 +14,7 @@ const { RangePicker } = DatePicker
 const USER_COLORS = ['#1890ff', '#f5222d', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#2f54eb', '#a0d911']
 
 export default function DashboardPage() {
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
-    dayjs().subtract(30, 'day'),
-    dayjs(),
-  ])
+  const [dateRange, setDateRange] = usePersistedDateRange('dashboard', 30)
   const [summary, setSummary] = useState<any[]>([])
   const [daily, setDaily] = useState<any[]>([])
   const [allUsers, setAllUsers] = useState<any[]>([])

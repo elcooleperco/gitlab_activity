@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import {
   Card, Col, Row, Statistic, DatePicker, Space, Spin, Empty, Descriptions,
   Avatar, Button, Table, Tag, Modal, Timeline, Tabs, Select,
@@ -8,7 +8,8 @@ import { UserOutlined, LinkOutlined } from '@ant-design/icons'
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip } from 'recharts'
 import ToggleBarChart from '../components/ToggleBarChart'
 import ExportButtons from '../components/ExportButtons'
-import dayjs, { Dayjs } from 'dayjs'
+import dayjs from 'dayjs'
+import usePersistedDateRange from '../hooks/usePersistedDateRange'
 import {
   getUser, getUserActivity, getDailyActivity, exportDailyCsv, getUserDayDetails,
   getUserActionTypes, getUserProjects, getUserActivityLog,
@@ -32,11 +33,24 @@ const PIE_COLORS = ['#1890ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2
 export default function UserDetailPage() {
   const { id } = useParams<{ id: string }>()
   const userId = Number(id)
+  const [searchParams] = useSearchParams()
 
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
-    dayjs().subtract(90, 'day'),
-    dayjs(),
-  ])
+  // Если переданы параметры from/to в URL — используем их, иначе персистентные
+  const [dateRange, setDateRange] = usePersistedDateRange('userDetail', 90)
+  const [urlApplied, setUrlApplied] = useState(false)
+
+  useEffect(() => {
+    const from = searchParams.get('from')
+    const to = searchParams.get('to')
+    if (from && to && !urlApplied) {
+      const dFrom = dayjs(from)
+      const dTo = dayjs(to)
+      if (dFrom.isValid() && dTo.isValid()) {
+        setDateRange([dFrom, dTo])
+      }
+      setUrlApplied(true)
+    }
+  }, [searchParams, urlApplied, setDateRange])
   const [user, setUser] = useState<any>(null)
   const [activity, setActivity] = useState<any>(null)
   const [daily, setDaily] = useState<any[]>([])

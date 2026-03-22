@@ -8,9 +8,10 @@ import {
   CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons'
-import dayjs, { Dayjs } from 'dayjs'
+import dayjs from 'dayjs'
 import { startSync, getSyncStatus, getSyncProgress, cancelSync, purgeData, clearSyncHistory } from '../api'
 import ExportButtons from '../components/ExportButtons'
+import usePersistedDateRange from '../hooks/usePersistedDateRange'
 
 const { RangePicker } = DatePicker
 
@@ -25,10 +26,7 @@ const stepIcon = (status: string) => {
 }
 
 export default function SyncPage() {
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
-    dayjs().subtract(30, 'day'),
-    dayjs(),
-  ])
+  const [dateRange, setDateRange] = usePersistedDateRange('sync', 30)
   const [forceUpdate, setForceUpdate] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [history, setHistory] = useState<any[]>([])

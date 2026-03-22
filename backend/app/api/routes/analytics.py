@@ -1,7 +1,7 @@
 """API аналитики — сводки, рейтинги, сравнения, тепловые карты."""
 
 from datetime import date
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -139,3 +139,16 @@ async def get_user_activity_log(
         user_id, date_from, date_to,
         project_id=project_id, action_type=action_type,
     )
+
+
+@router.get("/workday-stats")
+async def get_workday_stats(
+    date_from: date = Query(..., description="Начало периода"),
+    date_to: date = Query(..., description="Конец периода"),
+    work_days: str = Query("1,2,3,4,5", description="Рабочие дни недели (1=пн,...,7=вс), через запятую"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Аналитика по рабочим/нерабочим дням для активных пользователей."""
+    wd_list = [int(x.strip()) for x in work_days.split(",") if x.strip().isdigit()]
+    analytics = AnalyticsService(db)
+    return await analytics.get_workday_stats(date_from, date_to, wd_list)
