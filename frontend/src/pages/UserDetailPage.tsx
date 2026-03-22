@@ -246,13 +246,29 @@ export default function UserDetailPage() {
               <BarChart data={daily}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" />
+                <YAxis yAxisId="left" />
+                <YAxis yAxisId="right" orientation="right" />
+                <Tooltip />
+                <Legend />
+                <Bar yAxisId="left" dataKey="commits" fill="#1890ff" name="Коммиты" />
+                <Bar yAxisId="left" dataKey="merge_requests" fill="#52c41a" name="MR" />
+                <Bar yAxisId="left" dataKey="issues" fill="#faad14" name="Issues" />
+                <Bar yAxisId="left" dataKey="notes" fill="#722ed1" name="Комментарии" />
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+
+          {/* График строк кода по дням */}
+          <Card title="Строки кода по дням" style={{ marginBottom: 24 }}>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={daily}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
                 <YAxis />
                 <Tooltip />
                 <Legend />
-                <Bar dataKey="commits" fill="#1890ff" name="Коммиты" />
-                <Bar dataKey="merge_requests" fill="#52c41a" name="MR" />
-                <Bar dataKey="issues" fill="#faad14" name="Issues" />
-                <Bar dataKey="notes" fill="#722ed1" name="Комментарии" />
+                <Bar dataKey="additions" fill="#52c41a" name="Добавлено строк" />
+                <Bar dataKey="deletions" fill="#f5222d" name="Удалено строк" />
               </BarChart>
             </ResponsiveContainer>
           </Card>

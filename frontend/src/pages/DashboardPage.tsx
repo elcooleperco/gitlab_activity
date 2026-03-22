@@ -71,15 +71,21 @@ export default function DashboardPage() {
   }
 
   /* Агрегация дневной активности — общая */
-  const dailyAgg: Record<string, { date: string; commits: number; mr: number; issues: number; notes: number }> = {}
+  const dailyAgg: Record<string, { date: string; commits: number; mr: number; issues: number; notes: number; additions: number; deletions: number }> = {}
   for (const row of daily) {
-    if (!dailyAgg[row.date]) dailyAgg[row.date] = { date: row.date, commits: 0, mr: 0, issues: 0, notes: 0 }
+    if (!dailyAgg[row.date]) dailyAgg[row.date] = { date: row.date, commits: 0, mr: 0, issues: 0, notes: 0, additions: 0, deletions: 0 }
     dailyAgg[row.date].commits += row.commits || 0
     dailyAgg[row.date].mr += row.merge_requests || 0
     dailyAgg[row.date].issues += row.issues || 0
     dailyAgg[row.date].notes += row.notes || 0
+    dailyAgg[row.date].additions += row.additions || 0
+    dailyAgg[row.date].deletions += row.deletions || 0
   }
   const dailyChartData = Object.values(dailyAgg).sort((a, b) => a.date.localeCompare(b.date))
+
+  /* Общее кол-во строк */
+  const totalAdditions = summary.reduce((s, u) => s + (u.additions || 0), 0)
+  const totalDeletions = summary.reduce((s, u) => s + (u.deletions || 0), 0)
 
   /* Колонки таблицы рейтинга */
   const rankingColumns = [
@@ -141,12 +147,14 @@ export default function DashboardPage() {
       ) : (
         <>
           <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={4}><Card><Statistic title="Активных" value={activeUsers.length} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-            <Col span={4}><Card><Statistic title="Неактивных" value={inactiveUsers.length} valueStyle={{ color: '#cf1322' }} /></Card></Col>
-            <Col span={4}><Card><Statistic title="Коммитов" value={totalCommits} /></Card></Col>
-            <Col span={4}><Card><Statistic title="Merge Requests" value={totalMR} /></Card></Col>
-            <Col span={4}><Card><Statistic title="Issues" value={totalIssues} /></Card></Col>
-            <Col span={4}><Card><Statistic title="Комментариев" value={totalNotes} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Активных" value={activeUsers.length} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Неактивных" value={inactiveUsers.length} valueStyle={{ color: '#cf1322' }} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Коммитов" value={totalCommits} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Строк +" value={totalAdditions} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Строк −" value={totalDeletions} valueStyle={{ color: '#f5222d' }} /></Card></Col>
+            <Col span={3}><Card><Statistic title="MR" value={totalMR} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Issues" value={totalIssues} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Комментариев" value={totalNotes} /></Card></Col>
           </Row>
 
           {/* График — сравнение или общий */}
@@ -184,6 +192,21 @@ export default function DashboardPage() {
                   <Bar dataKey="notes" fill="#722ed1" name="Комментарии" />
                 </BarChart>
               )}
+            </ResponsiveContainer>
+          </Card>
+
+          {/* График строк кода по дням */}
+          <Card title="Строки кода по дням" style={{ marginBottom: 24 }}>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={dailyChartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="additions" fill="#52c41a" name="Добавлено строк" />
+                <Bar dataKey="deletions" fill="#f5222d" name="Удалено строк" />
+              </BarChart>
             </ResponsiveContainer>
           </Card>
 
