@@ -1,10 +1,10 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci --loglevel verbose 2>&1
 COPY . .
-RUN npm run build
+RUN echo "Сборка frontend..." && npm run build 2>&1
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
