@@ -37,6 +37,7 @@ export default function SyncPage() {
   // Прогресс синхронизации
   const [progress, setProgress] = useState<any>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const logsContainerRef = useRef<HTMLDivElement>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -80,9 +81,14 @@ export default function SyncPage() {
     }, 1500)
   }
 
-  // Автоскролл логов вниз
+  // Автоскролл логов — только если пользователь уже внизу
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = logsContainerRef.current
+    if (!el) return
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    if (isAtBottom) {
+      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [progress?.logs])
 
   const loadHistory = async () => {
@@ -281,7 +287,7 @@ export default function SyncPage() {
                 key: 'logs',
                 label: `Лог операций (${progress.logs?.length || 0})`,
                 children: (
-                  <div style={{
+                  <div ref={logsContainerRef} style={{
                     maxHeight: 300, overflow: 'auto',
                     background: '#1e1e1e', color: '#d4d4d4',
                     padding: '8px 12px', borderRadius: 4,
