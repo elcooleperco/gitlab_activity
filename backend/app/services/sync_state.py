@@ -11,6 +11,7 @@ class SyncStep:
     """Шаг плана синхронизации."""
     name: str
     status: str = "pending"  # pending, running, completed, skipped, failed
+    count: int = 0  # Кол-во обработанных объектов
 
 
 @dataclass
@@ -62,6 +63,13 @@ class SyncProgress:
             if s.name == name:
                 s.status = "completed"
 
+    def add_to_step(self, name: str, count: int) -> None:
+        """Добавить к счётчику шага."""
+        for s in self.steps:
+            if s.name == name:
+                s.count += count
+                return
+
     def fail_step(self, name: str) -> None:
         """Пометить шаг как неудачный."""
         for s in self.steps:
@@ -88,7 +96,7 @@ class SyncProgress:
             "cancelled": self.cancelled,
             "percent": round(self.percent, 1),
             "current_step": self.current_step,
-            "steps": [{"name": s.name, "status": s.status} for s in self.steps],
+            "steps": [{"name": s.name, "status": s.status, "count": s.count} for s in self.steps],
             "logs": self.logs[-30:],  # Последние 30 записей
         }
 
