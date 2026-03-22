@@ -186,18 +186,18 @@ class SyncService:
                 raise
 
     async def _fix_orphaned_commits(self) -> None:
-        """Привязать коммиты без user_id к пользователям через различные маппинги."""
-        from sqlalchemy import update
+        """Привязать коммиты без user_id к пользователям через различные стратегии."""
+        from sqlalchemy import update, distinct
 
-        # 1. Маппинг: username/name -> user_id (lower case)
+        fixed = 0
+
+        # Стратегия 1: По данным из GitLab-профиля (username, name, email)
         result = await self.session.execute(
             select(GitlabUser.id, GitlabUser.username, GitlabUser.name, GitlabUser.email)
         )
         users = result.fetchall()
 
-        fixed = 0
         for user in users:
-            # Обновляем коммиты где author_name совпадает с username или name (case-insensitive)
             names_to_try = set()
             if user.username:
                 names_to_try.add(user.username.lower())
@@ -213,7 +213,6 @@ class SyncService:
                 )
                 fixed += res.rowcount
 
-            # Обновляем по email (дополнительные email — в git может быть локальный email)
             if user.email:
                 res = await self.session.execute(
                     update(Commit)
@@ -223,8 +222,62 @@ class SyncService:
                 )
                 fixed += res.rowcount
 
+        await self.session.flush()
+
+        # Стратегия 2: Распространение привязки — если хоть один коммит
+        # с данным author_email привязан к user_id, привяжем ВСЕ коммиты
+        # с этим author_email к тому же user_id.
+        # Это покрывает случай когда git настроен с другим email,
+        # но push-событие уже привязало один коммит по SHA.
+        orphan_emails = await self.session.execute(
+            select(distinct(Commit.author_email))
+            .where(Commit.user_id.is_(None))
+            .where(Commit.author_email != "")
+        )
+        for (email,) in orphan_emails.fetchall():
+            # Найти user_id у уже привязанного коммита с таким же email
+            known = await self.session.execute(
+                select(Commit.user_id)
+                .where(Commit.author_email == email)
+                .where(Commit.user_id.is_not(None))
+                .limit(1)
+            )
+            row = known.fetchone()
+            if row:
+                res = await self.session.execute(
+                    update(Commit)
+                    .where(Commit.user_id.is_(None))
+                    .where(Commit.author_email == email)
+                    .values(user_id=row[0])
+                )
+                fixed += res.rowcount
+
+        # Стратегия 3: То же по author_name
+        orphan_names = await self.session.execute(
+            select(distinct(Commit.author_name))
+            .where(Commit.user_id.is_(None))
+            .where(Commit.author_name != "")
+        )
+        for (name,) in orphan_names.fetchall():
+            known = await self.session.execute(
+                select(Commit.user_id)
+                .where(Commit.author_name == name)
+                .where(Commit.user_id.is_not(None))
+                .limit(1)
+            )
+            row = known.fetchone()
+            if row:
+                res = await self.session.execute(
+                    update(Commit)
+                    .where(Commit.user_id.is_(None))
+                    .where(Commit.author_name == name)
+                    .values(user_id=row[0])
+                )
+                fixed += res.rowcount
+
         await self.session.commit()
         if fixed:
+            sync_progress.add_log(f"Привязано осиротевших коммитов: {fixed}")
             logger.info("Привязано осиротевших коммитов", count=fixed)
 
     async def sync_users(self) -> None:
