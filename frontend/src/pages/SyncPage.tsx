@@ -9,7 +9,7 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
-import { startSync, getSyncStatus, getSyncProgress, cancelSync, purgeData } from '../api'
+import { startSync, getSyncStatus, getSyncProgress, cancelSync, purgeData, clearSyncHistory } from '../api'
 import ExportButtons from '../components/ExportButtons'
 
 const { RangePicker } = DatePicker
@@ -324,6 +324,30 @@ export default function SyncPage() {
         <Space style={{ marginBottom: 8 }}>
           <Button onClick={loadHistory}>Обновить</Button>
           <ExportButtons data={history} columns={columns} filename="история_синхронизаций" />
+          <Button
+            danger
+            size="small"
+            onClick={() => {
+              Modal.confirm({
+                title: 'Очистка истории',
+                content: 'Удалить записи истории синхронизаций старше 7 дней?',
+                okText: 'Удалить',
+                okType: 'danger',
+                cancelText: 'Отмена',
+                onOk: async () => {
+                  try {
+                    const res = await clearSyncHistory(7)
+                    message.success(`Удалено ${res.data.deleted} записей`)
+                    loadHistory()
+                  } catch (err: any) {
+                    message.error('Ошибка: ' + (err?.response?.data?.detail || err?.message))
+                  }
+                },
+              })
+            }}
+          >
+            Очистить старше 7 дней
+          </Button>
         </Space>
         <Table
           dataSource={history}

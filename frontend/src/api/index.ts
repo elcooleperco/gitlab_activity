@@ -16,6 +16,8 @@ export const getSyncProgress = () => api.get('/sync/progress')
 export const cancelSync = () => api.post('/sync/cancel')
 export const purgeData = (data: { date_from: string; date_to: string }) =>
   api.post('/sync/purge', data)
+export const clearSyncHistory = (days: number = 7) =>
+  api.post('/sync/clear-history', null, { params: { days } })
 
 /** Пользователи */
 export const getUsers = (search?: string) => api.get('/users', { params: { search } })

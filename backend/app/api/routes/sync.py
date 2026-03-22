@@ -151,3 +151,23 @@ async def purge_data(
 
     await db.commit()
     return {"status": "ok", "deleted": deleted}
+
+
+@router.post("/clear-history")
+async def clear_sync_history(
+    days: int = 7,
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить записи истории синхронизаций старше N дней."""
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(days=days)
+    result = await db.execute(
+        delete(SyncLog).where(
+            and_(
+                SyncLog.started_at < cutoff,
+                SyncLog.status != "running",
+            )
+        )
+    )
+    await db.commit()
+    return {"status": "ok", "deleted": result.rowcount, "older_than_days": days}
