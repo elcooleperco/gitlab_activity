@@ -14,9 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Код приложения
 COPY . .
 
-# Скрипт запуска: миграции + сервер
+# Скрипт запуска: миграции + сервер (sed убирает Windows \r)
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 8000
 
