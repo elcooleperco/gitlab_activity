@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Card, Col, Row, Statistic, DatePicker, Space, Table, Spin, Empty, Button, Select, Tabs, Tag, Switch } from 'antd'
+import {
+  UserOutlined, TeamOutlined, CodeOutlined, PlusCircleOutlined,
+  MinusCircleOutlined, MergeOutlined, BugOutlined, CommentOutlined,
+  BarChartOutlined, ArrowDownOutlined, ArrowUpOutlined,
+} from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { getSummary, getDailyActivity, getUsers, exportSummaryCsv } from '../api'
 import ToggleBarChart from '../components/ToggleBarChart'
@@ -159,14 +164,14 @@ export default function DashboardPage() {
       ) : (
         <>
           <Row gutter={16} style={{ marginBottom: 24 }}>
-            <Col span={3}><Card><Statistic title="Активных" value={activeUsers.length} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Неактивных" value={inactiveUsers.length} valueStyle={{ color: '#cf1322' }} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Коммитов" value={totalCommits} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Строк +" value={totalAdditions} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Строк −" value={totalDeletions} valueStyle={{ color: '#f5222d' }} /></Card></Col>
-            <Col span={3}><Card><Statistic title="MR" value={totalMR} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Issues" value={totalIssues} /></Card></Col>
-            <Col span={3}><Card><Statistic title="Комментариев" value={totalNotes} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Активных" value={activeUsers.length} valueStyle={{ color: '#52c41a' }} prefix={<TeamOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Неактивных" value={inactiveUsers.length} valueStyle={{ color: '#cf1322' }} prefix={<UserOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Коммитов" value={totalCommits} prefix={<CodeOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Строк +" value={totalAdditions} valueStyle={{ color: '#52c41a' }} prefix={<PlusCircleOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Строк −" value={totalDeletions} valueStyle={{ color: '#f5222d' }} prefix={<MinusCircleOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="MR" value={totalMR} prefix={<MergeOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Issues" value={totalIssues} prefix={<BugOutlined />} /></Card></Col>
+            <Col span={3}><Card><Statistic title="Комментариев" value={totalNotes} prefix={<CommentOutlined />} /></Card></Col>
           </Row>
 
           {/* График — сравнение или общий (клик на легенду скрывает/показывает) */}
@@ -208,9 +213,9 @@ export default function DashboardPage() {
 
           {/* Статистика оценок */}
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col span={6}><Card><Statistic title="Медиана оценки" value={medianScore} precision={0} /></Card></Col>
-            <Col span={6}><Card><Statistic title="Мин. оценка" value={minScore} valueStyle={{ color: '#cf1322' }} /></Card></Col>
-            <Col span={6}><Card><Statistic title="Макс. оценка" value={maxScore} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Медиана оценки" value={medianScore} precision={0} prefix={<BarChartOutlined />} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Мин. оценка" value={minScore} valueStyle={{ color: '#cf1322' }} prefix={<ArrowDownOutlined />} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Макс. оценка" value={maxScore} valueStyle={{ color: '#52c41a' }} prefix={<ArrowUpOutlined />} /></Card></Col>
             <Col span={6}><Card><Space><span>Подсветить ниже медианы:</span><Switch checked={highlightBelowMedian} onChange={setHighlightBelowMedian} /></Space></Card></Col>
           </Row>
 

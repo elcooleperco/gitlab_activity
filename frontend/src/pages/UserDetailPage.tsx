@@ -338,8 +338,15 @@ export default function UserDetailPage() {
                   <div>
                     <Tag color={cfg.color}>{cfg.label}</Tag>
                     {a.time && <span style={{ color: '#999', fontSize: 12, marginRight: 8 }}>{dayjs(a.time).format('HH:mm')}</span>}
-                    <strong>{a.title}</strong>
-                    {a.details && <span style={{ color: '#666', marginLeft: 8 }}>{a.details}</span>}
+                    {a.gitlab_url ? (
+                      <a href={a.gitlab_url} target="_blank" rel="noopener noreferrer" style={{ fontWeight: 'bold' }}>
+                        {a.title} <LinkOutlined />
+                      </a>
+                    ) : (
+                      <strong>{a.title}</strong>
+                    )}
+                    {a.project_name && <Tag style={{ marginLeft: 8 }}>{a.project_name}</Tag>}
+                    {a.details && <span style={{ color: '#666', marginLeft: 4 }}>{a.details}</span>}
                   </div>
                 ),
               }

@@ -240,20 +240,40 @@ class AnalyticsService:
     async def get_user_day_details(
         self, user_id: int, target_date: date
     ) -> dict:
-        """Детальный список действий пользователя за конкретный день."""
+        """Детальный список действий пользователя за конкретный день с ссылками на GitLab."""
         result: dict = {"date": str(target_date), "user_id": user_id, "actions": []}
+
+        # Маппинг project_id -> web_url для формирования ссылок
+        proj_result = await self.session.execute(
+            select(GitlabProject.id, GitlabProject.web_url, GitlabProject.name)
+        )
+        projects_map: dict[int, str] = {}
+        project_names: dict[int, str] = {}
+        for row in proj_result.fetchall():
+            if row[1]:
+                projects_map[row[0]] = row[1]
+            project_names[row[0]] = row[2] or ""
+
+        def _purl(pid: int | None) -> str:
+            return projects_map.get(pid, "") if pid else ""
+
+        def _pname(pid: int | None) -> str:
+            return project_names.get(pid, "") if pid else ""
 
         # Коммиты
         commits_q = select(Commit).where(
             and_(Commit.user_id == user_id, func.date(Commit.committed_at) == target_date)
         )
         for c in (await self.session.execute(commits_q)).scalars().all():
+            base = _purl(c.project_id)
             result["actions"].append({
                 "type": "commit",
                 "time": c.committed_at.isoformat() if c.committed_at else None,
                 "title": (c.message or "")[:120],
                 "details": f"+{c.additions} -{c.deletions}",
                 "project_id": c.project_id,
+                "project_name": _pname(c.project_id),
+                "gitlab_url": f"{base}/-/commit/{c.sha}" if base and c.sha else "",
             })
 
         # MR
@@ -261,12 +281,15 @@ class AnalyticsService:
             and_(MergeRequest.author_id == user_id, func.date(MergeRequest.created_at) == target_date)
         )
         for mr in (await self.session.execute(mr_q)).scalars().all():
+            base = _purl(mr.project_id)
             result["actions"].append({
                 "type": "merge_request",
                 "time": mr.created_at.isoformat() if mr.created_at else None,
                 "title": mr.title,
                 "details": f"!{mr.iid} ({mr.state})",
                 "project_id": mr.project_id,
+                "project_name": _pname(mr.project_id),
+                "gitlab_url": f"{base}/-/merge_requests/{mr.iid}" if base and mr.iid else "",
             })
 
         # Issues
@@ -274,12 +297,15 @@ class AnalyticsService:
             and_(Issue.author_id == user_id, func.date(Issue.created_at) == target_date)
         )
         for issue in (await self.session.execute(issues_q)).scalars().all():
+            base = _purl(issue.project_id)
             result["actions"].append({
                 "type": "issue",
                 "time": issue.created_at.isoformat() if issue.created_at else None,
                 "title": issue.title,
                 "details": f"#{issue.iid} ({issue.state})",
                 "project_id": issue.project_id,
+                "project_name": _pname(issue.project_id),
+                "gitlab_url": f"{base}/-/issues/{issue.iid}" if base and issue.iid else "",
             })
 
         # Комментарии
@@ -287,12 +313,19 @@ class AnalyticsService:
             and_(Note.author_id == user_id, Note.system.is_(False), func.date(Note.created_at) == target_date)
         )
         for n in (await self.session.execute(notes_q)).scalars().all():
+            base = _purl(n.project_id)
+            if n.noteable_type == "MergeRequest":
+                url = f"{base}/-/merge_requests/{n.noteable_id}#note_{n.id}" if base else ""
+            else:
+                url = f"{base}/-/issues/{n.noteable_id}#note_{n.id}" if base else ""
             result["actions"].append({
                 "type": "note",
                 "time": n.created_at.isoformat() if n.created_at else None,
                 "title": f"Комментарий к {n.noteable_type} #{n.noteable_id}",
                 "details": f"{n.body_length} символов",
                 "project_id": n.project_id,
+                "project_name": _pname(n.project_id),
+                "gitlab_url": url,
             })
 
         # Пайплайны
@@ -300,12 +333,55 @@ class AnalyticsService:
             and_(Pipeline.user_id == user_id, func.date(Pipeline.created_at) == target_date)
         )
         for p in (await self.session.execute(pipelines_q)).scalars().all():
+            base = _purl(p.project_id)
             result["actions"].append({
                 "type": "pipeline",
                 "time": p.created_at.isoformat() if p.created_at else None,
                 "title": f"Pipeline #{p.id} ({p.status})",
                 "details": f"{p.duration or 0} сек, ветка: {p.ref}",
                 "project_id": p.project_id,
+                "project_name": _pname(p.project_id),
+                "gitlab_url": f"{base}/-/pipelines/{p.id}" if base else "",
+            })
+
+        # События (pushed to и т.д.)
+        events_q = select(Event).where(
+            and_(Event.user_id == user_id, func.date(Event.created_at) == target_date)
+        )
+        for ev in (await self.session.execute(events_q)).scalars().all():
+            base = _purl(ev.project_id)
+            url = ""
+            title = ev.action_name or "событие"
+            details = ""
+            if ev.push_ref:
+                if ev.push_commit_sha and base:
+                    url = f"{base}/-/commit/{ev.push_commit_sha}"
+                elif base:
+                    url = f"{base}/-/tree/{ev.push_ref}"
+                title = f"push → {ev.push_ref}"
+                parts = []
+                if ev.push_commit_count:
+                    parts.append(f"{ev.push_commit_count} коммит(ов)")
+                if ev.push_commit_title:
+                    parts.append(ev.push_commit_title[:120])
+                details = ", ".join(parts) if parts else ""
+            elif ev.target_type and ev.target_iid:
+                if ev.target_type == "MergeRequest" and base:
+                    url = f"{base}/-/merge_requests/{ev.target_iid}"
+                elif ev.target_type == "Issue" and base:
+                    url = f"{base}/-/issues/{ev.target_iid}"
+                title = f"{ev.action_name} {ev.target_type}"
+                if ev.target_title:
+                    details = ev.target_title[:120]
+
+            result["actions"].append({
+                "type": "event",
+                "time": ev.created_at.isoformat() if ev.created_at else None,
+                "title": title,
+                "details": details,
+                "project_id": ev.project_id,
+                "project_name": _pname(ev.project_id) if ev.project_id else "",
+                "gitlab_url": url,
             })
 
         # Сортируем по времени

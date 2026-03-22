@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { Layout, Menu } from 'antd'
 import {
@@ -31,15 +32,22 @@ const menuItems = [
 
 export default function App() {
   const location = useLocation()
+  const [collapsed, setCollapsed] = useState(false)
 
   /* Определяем активный пункт меню по текущему пути */
   const selectedKey = '/' + (location.pathname.split('/')[1] || '')
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider breakpoint="lg" collapsedWidth="80">
-        <div style={{ color: '#fff', textAlign: 'center', padding: '16px 0', fontSize: 18, fontWeight: 'bold' }}>
-          GL Analyzer
+      <Sider
+        collapsible
+        collapsed={collapsed}
+        onCollapse={setCollapsed}
+        breakpoint="lg"
+        collapsedWidth={60}
+      >
+        <div style={{ color: '#fff', textAlign: 'center', padding: '16px 0', fontSize: collapsed ? 14 : 18, fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+          {collapsed ? 'GL' : 'GL Analyzer'}
         </div>
         <Menu
           theme="dark"
