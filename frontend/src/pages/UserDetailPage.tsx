@@ -7,6 +7,7 @@ import {
 import { UserOutlined, LinkOutlined } from '@ant-design/icons'
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip } from 'recharts'
 import ToggleBarChart from '../components/ToggleBarChart'
+import ExportButtons from '../components/ExportButtons'
 import dayjs, { Dayjs } from 'dayjs'
 import {
   getUser, getUserActivity, getDailyActivity, exportDailyCsv, getUserDayDetails,
@@ -286,6 +287,8 @@ export default function UserDetailPage() {
                 value={logTypeFilter}
                 options={Object.entries(ACTION_TYPE_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
               />
+
+              <ExportButtons data={activityLog} columns={logColumns} filename={`лог_${user?.username || 'user'}`} />
             </Space>
             <Table
               dataSource={activityLog}

@@ -8,6 +8,7 @@ import { UserOutlined } from '@ant-design/icons'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts'
 import dayjs, { Dayjs } from 'dayjs'
 import { getProject, getProjectSummary, getDailyActivity } from '../api'
+import ExportButtons from '../components/ExportButtons'
 
 const { RangePicker } = DatePicker
 const PIE_COLORS = ['#1890ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#2f54eb']
@@ -117,7 +118,7 @@ export default function ProjectDetailPage() {
               </Card>
             </Col>
             <Col span={12}>
-              <Card title="Таблица участников">
+              <Card title="Таблица участников" extra={<ExportButtons data={summary.contributors || []} columns={[{title:'Пользователь',dataIndex:'username'},{title:'Имя',dataIndex:'name'},{title:'Действий',dataIndex:'actions_count'}]} filename="участники_проекта" />}>
                 <Table
                   dataSource={summary.contributors || []}
                   columns={[

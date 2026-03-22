@@ -5,6 +5,7 @@ import { getSummary, getDailyActivity, getUsers, exportSummaryCsv } from '../api
 import ToggleBarChart from '../components/ToggleBarChart'
 import ToggleLineChart from '../components/ToggleLineChart'
 import { Link } from 'react-router-dom'
+import ExportButtons from '../components/ExportButtons'
 
 const { RangePicker } = DatePicker
 
@@ -221,7 +222,8 @@ export default function DashboardPage() {
               {
                 key: 'active',
                 label: `Активные (${activeUsers.length})`,
-                children: (
+                children: (<>
+                  <div style={{ marginBottom: 8 }}><ExportButtons data={activeUsers} columns={rankingColumns} filename="активные_пользователи" /></div>
                   <Table
                     dataSource={activeUsers}
                     columns={rankingColumns}
@@ -232,12 +234,13 @@ export default function DashboardPage() {
                       highlightBelowMedian && r.total_score < medianScore ? 'row-below-median' : ''
                     }
                   />
-                ),
+                </>),
               },
               {
                 key: 'inactive',
                 label: <span style={{ color: '#cf1322' }}>Неактивные ({inactiveUsers.length})</span>,
-                children: (
+                children: (<>
+                  <div style={{ marginBottom: 8 }}><ExportButtons data={inactiveUsers} columns={inactiveColumns} filename="неактивные_пользователи" /></div>
                   <Table
                     dataSource={inactiveUsers}
                     columns={inactiveColumns}
@@ -245,7 +248,7 @@ export default function DashboardPage() {
                     pagination={{ pageSize: 20 }}
                     size="small"
                   />
-                ),
+                </>),
               },
             ]}
           />

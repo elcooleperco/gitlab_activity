@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import { startSync, getSyncStatus, getSyncProgress, cancelSync, purgeData } from '../api'
+import ExportButtons from '../components/ExportButtons'
 
 const { RangePicker } = DatePicker
 
@@ -38,7 +39,6 @@ export default function SyncPage() {
   const [progress, setProgress] = useState<any>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const logsContainerRef = useRef<HTMLDivElement>(null)
-  const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadHistory()
@@ -81,13 +81,13 @@ export default function SyncPage() {
     }, 1500)
   }
 
-  // Автоскролл логов — только если пользователь уже внизу
+  // Автоскролл логов — только если пользователь уже внизу (скроллим контейнер, не страницу)
   useEffect(() => {
     const el = logsContainerRef.current
     if (!el) return
     const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
     if (isAtBottom) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      el.scrollTop = el.scrollHeight
     }
   }, [progress?.logs])
 
@@ -310,7 +310,6 @@ export default function SyncPage() {
                     {progress.logs?.map((line: string, i: number) => (
                       <div key={i}>{line}</div>
                     ))}
-                    <div ref={logsEndRef} />
                   </div>
                 ),
               },
@@ -320,7 +319,10 @@ export default function SyncPage() {
       )}
 
       <Card title="История синхронизаций">
-        <Button onClick={loadHistory} style={{ marginBottom: 8 }}>Обновить</Button>
+        <Space style={{ marginBottom: 8 }}>
+          <Button onClick={loadHistory}>Обновить</Button>
+          <ExportButtons data={history} columns={columns} filename="история_синхронизаций" />
+        </Space>
         <Table
           dataSource={history}
           columns={columns}

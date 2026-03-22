@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Table, Input, Tag } from 'antd'
 import { Link } from 'react-router-dom'
 import { getProjects } from '../api'
+import ExportButtons from '../components/ExportButtons'
 
 const { Search } = Input
 
@@ -52,6 +53,7 @@ export default function ProjectsPage() {
         style={{ width: 300, marginBottom: 16 }}
         allowClear
       />
+      <div style={{ marginBottom: 8 }}><ExportButtons data={projects} columns={columns} filename="проекты" /></div>
       <Table
         dataSource={projects}
         columns={columns}

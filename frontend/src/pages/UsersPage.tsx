@@ -3,6 +3,7 @@ import { Table, Input, Tag, Avatar, Space } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { getUsers } from '../api'
+import ExportButtons from '../components/ExportButtons'
 
 const { Search } = Input
 
@@ -64,6 +65,7 @@ export default function UsersPage() {
         style={{ width: 300, marginBottom: 16 }}
         allowClear
       />
+      <div style={{ marginBottom: 8 }}><ExportButtons data={users} columns={columns} filename="пользователи" /></div>
       <Table
         dataSource={users}
         columns={columns}
