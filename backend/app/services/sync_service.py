@@ -625,20 +625,49 @@ class SyncService:
             count += 1
 
         # Привязка коммитов к пользователям через push-события
-        # Если у коммита нет user_id, но push-событие знает кто пушил — обновляем
-        push_shas = [
-            ev.get("push_data", {}).get("commit_to")
-            for ev in events_data
-            if ev.get("push_data", {}).get("commit_to")
-        ]
-        if push_shas:
-            from sqlalchemy import update
-            await self.session.execute(
-                update(Commit)
-                .where(Commit.sha.in_(push_shas))
-                .where(Commit.user_id.is_(None))
-                .values(user_id=user_id)
+        from sqlalchemy import update
+        for ev in events_data:
+            pd = ev.get("push_data") or {}
+            commit_sha = pd.get("commit_to")
+            project_id = ev.get("project_id")
+            if not commit_sha or not project_id:
+                continue
+            # Пропускаем нулевой SHA (удаление ветки)
+            if commit_sha == "0" * 40:
+                continue
+
+            # Проверяем существует ли коммит в БД
+            existing = await self.session.execute(
+                select(Commit.sha).where(Commit.sha == commit_sha).limit(1)
             )
+            if existing.fetchone():
+                # Коммит есть — просто обновляем user_id если не привязан
+                await self.session.execute(
+                    update(Commit)
+                    .where(Commit.sha == commit_sha)
+                    .where(Commit.user_id.is_(None))
+                    .values(user_id=user_id)
+                )
+            else:
+                # Коммита нет в БД — загружаем из GitLab API по SHA
+                c = await self.client.get_commit_by_sha(project_id, commit_sha)
+                if c:
+                    stats = c.get("stats") or {}
+                    stmt = pg_insert(Commit).values(
+                        sha=c["id"],
+                        project_id=project_id,
+                        author_name=c.get("author_name", ""),
+                        author_email=c.get("author_email", ""),
+                        user_id=user_id,
+                        message=c.get("message"),
+                        committed_at=_parse_dt(c.get("committed_date") or c.get("created_at")),
+                        additions=stats.get("additions", 0),
+                        deletions=stats.get("deletions", 0),
+                    ).on_conflict_do_nothing()
+                    await self.session.execute(stmt)
+                    sync_progress.add_log(
+                        f"  Загружен коммит {commit_sha[:8]} для user_id={user_id}"
+                    )
 
         await self.session.commit()
         self.counters["events"] = self.counters.get("events", 0) + count

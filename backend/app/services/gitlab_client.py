@@ -88,6 +88,17 @@ class GitLabClient:
             params["until"] = until.isoformat()
         return await self._get_all_pages(f"/projects/{project_id}/repository/commits", params)
 
+    async def get_commit_by_sha(
+        self,
+        project_id: int,
+        sha: str,
+    ) -> dict[str, Any] | None:
+        """Получить конкретный коммит по SHA (с stats)."""
+        try:
+            return await self._request("GET", f"/projects/{project_id}/repository/commits/{sha}", params={"stats": "true"})
+        except Exception:
+            return None
+
     async def get_project_merge_requests(
         self,
         project_id: int,
