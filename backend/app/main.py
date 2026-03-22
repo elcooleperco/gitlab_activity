@@ -15,6 +15,8 @@ from app.api.routes import sync, users, projects, analytics, export
 async def lifespan(app: FastAPI):
     """Инициализация при запуске и очистка при остановке."""
     setup_logging()
+    # Загружаем настройки из БД (gitlab_url, gitlab_token и т.д.)
+    await settings.load_from_db()
     yield
 
 

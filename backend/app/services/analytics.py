@@ -2,11 +2,13 @@
 
 from datetime import date
 
-from sqlalchemy import select, func, case, and_, or_, union_all, literal
+from sqlalchemy import select, func, case, and_, or_, union_all, literal, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings as app_settings
+
 from app.db.models import (
-    GitlabUser, Commit, MergeRequest, Issue, Note, Pipeline, Event,
+    GitlabUser, GitlabProject, Commit, MergeRequest, Issue, Note, Pipeline, Event,
 )
 
 
@@ -415,3 +417,341 @@ class AnalyticsService:
             "events": events_count,
             "total_score": total_score,
         }
+
+    async def get_user_action_types(
+        self, user_id: int, date_from: date, date_to: date
+    ) -> list[dict]:
+        """Группировка событий пользователя по типу действия (action_name) за период."""
+        q = (
+            select(
+                Event.action_name,
+                func.count().label("count"),
+            )
+            .where(and_(
+                Event.user_id == user_id,
+                func.date(Event.created_at) >= date_from,
+                func.date(Event.created_at) <= date_to,
+            ))
+            .group_by(Event.action_name)
+            .order_by(func.count().desc())
+        )
+        result = await self.session.execute(q)
+        return [{"action": row.action_name, "count": row.count} for row in result.fetchall()]
+
+    async def get_user_projects(
+        self, user_id: int, date_from: date, date_to: date
+    ) -> list[dict]:
+        """В каких проектах работал пользователь и сколько действий в каждом."""
+        # Собираем project_id из коммитов, MR, issues, notes, events
+        sources = [
+            select(Commit.project_id.label("pid")).where(and_(
+                Commit.user_id == user_id,
+                func.date(Commit.committed_at) >= date_from,
+                func.date(Commit.committed_at) <= date_to,
+            )),
+            select(MergeRequest.project_id.label("pid")).where(and_(
+                MergeRequest.author_id == user_id,
+                func.date(MergeRequest.created_at) >= date_from,
+                func.date(MergeRequest.created_at) <= date_to,
+            )),
+            select(Issue.project_id.label("pid")).where(and_(
+                Issue.author_id == user_id,
+                func.date(Issue.created_at) >= date_from,
+                func.date(Issue.created_at) <= date_to,
+            )),
+            select(Note.project_id.label("pid")).where(and_(
+                Note.author_id == user_id,
+                func.date(Note.created_at) >= date_from,
+                func.date(Note.created_at) <= date_to,
+            )),
+            select(Event.project_id.label("pid")).where(and_(
+                Event.user_id == user_id,
+                Event.project_id.is_not(None),
+                func.date(Event.created_at) >= date_from,
+                func.date(Event.created_at) <= date_to,
+            )),
+        ]
+        combined = union_all(*sources).subquery()
+        q = (
+            select(combined.c.pid, func.count().label("count"))
+            .group_by(combined.c.pid)
+            .order_by(func.count().desc())
+        )
+        result = await self.session.execute(q)
+        rows = result.fetchall()
+
+        # Подтягиваем названия проектов
+        project_ids = [r.pid for r in rows if r.pid]
+        projects_map: dict[int, str] = {}
+        if project_ids:
+            pq = select(GitlabProject.id, GitlabProject.name, GitlabProject.path_with_namespace).where(
+                GitlabProject.id.in_(project_ids)
+            )
+            for p in (await self.session.execute(pq)).fetchall():
+                projects_map[p.id] = p.path_with_namespace
+
+        return [
+            {
+                "project_id": r.pid,
+                "project_name": projects_map.get(r.pid, f"Проект #{r.pid}"),
+                "actions_count": r.count,
+            }
+            for r in rows if r.pid
+        ]
+
+    async def get_project_summary(
+        self, project_id: int, date_from: date, date_to: date
+    ) -> dict:
+        """Сводка активности по проекту — общие метрики и топ пользователей."""
+        # Общие метрики проекта
+        commits_q = select(
+            func.count().label("count"),
+            func.coalesce(func.sum(Commit.additions), 0).label("additions"),
+            func.coalesce(func.sum(Commit.deletions), 0).label("deletions"),
+        ).where(and_(
+            Commit.project_id == project_id,
+            func.date(Commit.committed_at) >= date_from,
+            func.date(Commit.committed_at) <= date_to,
+        ))
+        commits = (await self.session.execute(commits_q)).fetchone()
+
+        mr_q = select(func.count()).where(and_(
+            MergeRequest.project_id == project_id,
+            func.date(MergeRequest.created_at) >= date_from,
+            func.date(MergeRequest.created_at) <= date_to,
+        ))
+        mr_count = (await self.session.execute(mr_q)).scalar() or 0
+
+        issues_q = select(func.count()).where(and_(
+            Issue.project_id == project_id,
+            func.date(Issue.created_at) >= date_from,
+            func.date(Issue.created_at) <= date_to,
+        ))
+        issues_count = (await self.session.execute(issues_q)).scalar() or 0
+
+        notes_q = select(func.count()).where(and_(
+            Note.project_id == project_id,
+            Note.system.is_(False),
+            func.date(Note.created_at) >= date_from,
+            func.date(Note.created_at) <= date_to,
+        ))
+        notes_count = (await self.session.execute(notes_q)).scalar() or 0
+
+        pipelines_q = select(func.count()).where(and_(
+            Pipeline.project_id == project_id,
+            func.date(Pipeline.created_at) >= date_from,
+            func.date(Pipeline.created_at) <= date_to,
+        ))
+        pipelines_count = (await self.session.execute(pipelines_q)).scalar() or 0
+
+        # Топ пользователей по количеству действий в проекте
+        user_sources = [
+            select(Commit.user_id.label("uid")).where(and_(
+                Commit.project_id == project_id,
+                Commit.user_id.is_not(None),
+                func.date(Commit.committed_at) >= date_from,
+                func.date(Commit.committed_at) <= date_to,
+            )),
+            select(MergeRequest.author_id.label("uid")).where(and_(
+                MergeRequest.project_id == project_id,
+                MergeRequest.author_id.is_not(None),
+                func.date(MergeRequest.created_at) >= date_from,
+                func.date(MergeRequest.created_at) <= date_to,
+            )),
+            select(Issue.author_id.label("uid")).where(and_(
+                Issue.project_id == project_id,
+                Issue.author_id.is_not(None),
+                func.date(Issue.created_at) >= date_from,
+                func.date(Issue.created_at) <= date_to,
+            )),
+            select(Note.author_id.label("uid")).where(and_(
+                Note.project_id == project_id,
+                Note.author_id.is_not(None),
+                func.date(Note.created_at) >= date_from,
+                func.date(Note.created_at) <= date_to,
+            )),
+            select(Event.user_id.label("uid")).where(and_(
+                Event.project_id == project_id,
+                Event.user_id.is_not(None),
+                func.date(Event.created_at) >= date_from,
+                func.date(Event.created_at) <= date_to,
+            )),
+        ]
+        combined = union_all(*user_sources).subquery()
+        users_q = (
+            select(combined.c.uid, func.count().label("count"))
+            .group_by(combined.c.uid)
+            .order_by(func.count().desc())
+        )
+        user_rows = (await self.session.execute(users_q)).fetchall()
+
+        # Подтягиваем имена
+        user_ids = [r.uid for r in user_rows]
+        users_map: dict[int, dict] = {}
+        if user_ids:
+            uq = select(GitlabUser.id, GitlabUser.username, GitlabUser.name, GitlabUser.avatar_url).where(
+                GitlabUser.id.in_(user_ids)
+            )
+            for u in (await self.session.execute(uq)).fetchall():
+                users_map[u.id] = {"username": u.username, "name": u.name, "avatar_url": u.avatar_url}
+
+        contributors = [
+            {
+                "user_id": r.uid,
+                "username": users_map.get(r.uid, {}).get("username", f"user#{r.uid}"),
+                "name": users_map.get(r.uid, {}).get("name", ""),
+                "avatar_url": users_map.get(r.uid, {}).get("avatar_url"),
+                "actions_count": r.count,
+            }
+            for r in user_rows
+        ]
+
+        return {
+            "commits": commits.count or 0,
+            "additions": commits.additions or 0,
+            "deletions": commits.deletions or 0,
+            "merge_requests": mr_count,
+            "issues": issues_count,
+            "notes": notes_count,
+            "pipelines": pipelines_count,
+            "contributors": contributors,
+        }
+
+    async def get_user_activity_log(
+        self, user_id: int, date_from: date, date_to: date,
+        project_id: int | None = None, action_type: str | None = None,
+    ) -> list[dict]:
+        """Детальный лог действий пользователя за период с фильтрацией и ссылками на GitLab."""
+        gitlab_url = app_settings.gitlab_url.rstrip("/")
+        actions: list[dict] = []
+
+        # Маппинг project_id -> path_with_namespace для формирования URL
+        pq = select(GitlabProject.id, GitlabProject.path_with_namespace)
+        projects_map: dict[int, str] = {}
+        for p in (await self.session.execute(pq)).fetchall():
+            projects_map[p.id] = p.path_with_namespace
+
+        def _project_url(pid: int | None) -> str:
+            if pid and pid in projects_map:
+                return f"{gitlab_url}/{projects_map[pid]}"
+            return ""
+
+        # Коммиты
+        if not action_type or action_type == "commit":
+            q = select(Commit).where(and_(
+                Commit.user_id == user_id,
+                func.date(Commit.committed_at) >= date_from,
+                func.date(Commit.committed_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(Commit.project_id == project_id)
+            q = q.order_by(desc(Commit.committed_at))
+            for c in (await self.session.execute(q)).scalars().all():
+                base = _project_url(c.project_id)
+                actions.append({
+                    "type": "commit",
+                    "date": c.committed_at.isoformat() if c.committed_at else None,
+                    "project_id": c.project_id,
+                    "project_name": projects_map.get(c.project_id, ""),
+                    "title": (c.message or "").split("\n")[0][:200],
+                    "details": f"+{c.additions} -{c.deletions}",
+                    "gitlab_url": f"{base}/-/commit/{c.sha}" if base else "",
+                })
+
+        # Merge Requests
+        if not action_type or action_type == "merge_request":
+            q = select(MergeRequest).where(and_(
+                MergeRequest.author_id == user_id,
+                func.date(MergeRequest.created_at) >= date_from,
+                func.date(MergeRequest.created_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(MergeRequest.project_id == project_id)
+            q = q.order_by(desc(MergeRequest.created_at))
+            for mr in (await self.session.execute(q)).scalars().all():
+                base = _project_url(mr.project_id)
+                actions.append({
+                    "type": "merge_request",
+                    "date": mr.created_at.isoformat() if mr.created_at else None,
+                    "project_id": mr.project_id,
+                    "project_name": projects_map.get(mr.project_id, ""),
+                    "title": mr.title,
+                    "details": f"!{mr.iid} ({mr.state})",
+                    "gitlab_url": f"{base}/-/merge_requests/{mr.iid}" if base else "",
+                })
+
+        # Issues
+        if not action_type or action_type == "issue":
+            q = select(Issue).where(and_(
+                Issue.author_id == user_id,
+                func.date(Issue.created_at) >= date_from,
+                func.date(Issue.created_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(Issue.project_id == project_id)
+            q = q.order_by(desc(Issue.created_at))
+            for issue in (await self.session.execute(q)).scalars().all():
+                base = _project_url(issue.project_id)
+                actions.append({
+                    "type": "issue",
+                    "date": issue.created_at.isoformat() if issue.created_at else None,
+                    "project_id": issue.project_id,
+                    "project_name": projects_map.get(issue.project_id, ""),
+                    "title": issue.title,
+                    "details": f"#{issue.iid} ({issue.state})",
+                    "gitlab_url": f"{base}/-/issues/{issue.iid}" if base else "",
+                })
+
+        # Комментарии
+        if not action_type or action_type == "note":
+            q = select(Note).where(and_(
+                Note.author_id == user_id,
+                Note.system.is_(False),
+                func.date(Note.created_at) >= date_from,
+                func.date(Note.created_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(Note.project_id == project_id)
+            q = q.order_by(desc(Note.created_at))
+            for n in (await self.session.execute(q)).scalars().all():
+                base = _project_url(n.project_id)
+                # Ссылка на MR или Issue
+                if n.noteable_type == "MergeRequest":
+                    url = f"{base}/-/merge_requests/{n.noteable_id}#note_{n.id}" if base else ""
+                else:
+                    url = f"{base}/-/issues/{n.noteable_id}#note_{n.id}" if base else ""
+                actions.append({
+                    "type": "note",
+                    "date": n.created_at.isoformat() if n.created_at else None,
+                    "project_id": n.project_id,
+                    "project_name": projects_map.get(n.project_id, ""),
+                    "title": f"Комментарий к {n.noteable_type}",
+                    "details": f"{n.body_length} символов",
+                    "gitlab_url": url,
+                })
+
+        # Пайплайны
+        if not action_type or action_type == "pipeline":
+            q = select(Pipeline).where(and_(
+                Pipeline.user_id == user_id,
+                func.date(Pipeline.created_at) >= date_from,
+                func.date(Pipeline.created_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(Pipeline.project_id == project_id)
+            q = q.order_by(desc(Pipeline.created_at))
+            for p in (await self.session.execute(q)).scalars().all():
+                base = _project_url(p.project_id)
+                actions.append({
+                    "type": "pipeline",
+                    "date": p.created_at.isoformat() if p.created_at else None,
+                    "project_id": p.project_id,
+                    "project_name": projects_map.get(p.project_id, ""),
+                    "title": f"Pipeline #{p.id} ({p.status})",
+                    "details": f"{p.duration or 0} сек, ветка: {p.ref}",
+                    "gitlab_url": f"{base}/-/pipelines/{p.id}" if base else "",
+                })
+
+        # Сортируем по дате (новые сверху)
+        actions.sort(key=lambda a: a.get("date") or "", reverse=True)
+        return actions

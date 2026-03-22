@@ -39,11 +39,13 @@ async def get_settings():
 
 @router.put("")
 async def update_settings(data: SettingsUpdate):
-    """Обновить настройки подключения к GitLab."""
+    """Обновить настройки подключения к GitLab и сохранить в БД."""
     if data.gitlab_url is not None:
         settings.gitlab_url = data.gitlab_url
+        await settings.save_to_db("gitlab_url", data.gitlab_url)
     if data.gitlab_token is not None:
         settings.gitlab_token = data.gitlab_token
+        await settings.save_to_db("gitlab_token", data.gitlab_token)
     return {"status": "ok"}
 
 

@@ -86,3 +86,56 @@ async def get_user_day_details(
     """Детальный список действий пользователя за конкретный день."""
     analytics = AnalyticsService(db)
     return await analytics.get_user_day_details(user_id, target_date)
+
+
+@router.get("/user-action-types/{user_id}")
+async def get_user_action_types(
+    user_id: int,
+    date_from: date = Query(..., description="Начало периода"),
+    date_to: date = Query(..., description="Конец периода"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Группировка действий пользователя по типам (push, comment и т.д.)."""
+    analytics = AnalyticsService(db)
+    return await analytics.get_user_action_types(user_id, date_from, date_to)
+
+
+@router.get("/user-projects/{user_id}")
+async def get_user_projects(
+    user_id: int,
+    date_from: date = Query(..., description="Начало периода"),
+    date_to: date = Query(..., description="Конец периода"),
+    db: AsyncSession = Depends(get_db),
+):
+    """В каких проектах работал пользователь и сколько действий в каждом."""
+    analytics = AnalyticsService(db)
+    return await analytics.get_user_projects(user_id, date_from, date_to)
+
+
+@router.get("/project-summary/{project_id}")
+async def get_project_summary(
+    project_id: int,
+    date_from: date = Query(..., description="Начало периода"),
+    date_to: date = Query(..., description="Конец периода"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сводка активности по проекту — метрики и список контрибьюторов."""
+    analytics = AnalyticsService(db)
+    return await analytics.get_project_summary(project_id, date_from, date_to)
+
+
+@router.get("/user-activity-log/{user_id}")
+async def get_user_activity_log(
+    user_id: int,
+    date_from: date = Query(..., description="Начало периода"),
+    date_to: date = Query(..., description="Конец периода"),
+    project_id: int | None = Query(None, description="Фильтр по проекту"),
+    action_type: str | None = Query(None, description="Фильтр по типу действия"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Детальный лог действий пользователя за период с фильтрацией и ссылками на GitLab."""
+    analytics = AnalyticsService(db)
+    return await analytics.get_user_activity_log(
+        user_id, date_from, date_to,
+        project_id=project_id, action_type=action_type,
+    )

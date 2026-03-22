@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Table, Input, Tag } from 'antd'
+import { Link } from 'react-router-dom'
 import { getProjects } from '../api'
 
 const { Search } = Input
@@ -26,7 +27,10 @@ export default function ProjectsPage() {
   }
 
   const columns = [
-    { title: 'Название', dataIndex: 'name', key: 'name' },
+    {
+      title: 'Название', dataIndex: 'name', key: 'name',
+      render: (v: string, r: any) => <Link to={`/projects/${r.id}`}>{v}</Link>,
+    },
     { title: 'Путь', dataIndex: 'path_with_namespace', key: 'path' },
     {
       title: 'Видимость',

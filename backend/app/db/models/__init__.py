@@ -9,6 +9,7 @@ from app.db.models.note import Note
 from app.db.models.pipeline import Pipeline
 from app.db.models.event import Event
 from app.db.models.sync_log import SyncLog
+from app.db.models.app_settings import AppSetting
 
 __all__ = [
     "GitlabUser",
@@ -20,4 +21,5 @@ __all__ = [
     "Pipeline",
     "Event",
     "SyncLog",
+    "AppSetting",
 ]

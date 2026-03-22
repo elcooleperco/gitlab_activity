@@ -11,6 +11,7 @@ import DashboardPage from './pages/DashboardPage'
 import UsersPage from './pages/UsersPage'
 import UserDetailPage from './pages/UserDetailPage'
 import ProjectsPage from './pages/ProjectsPage'
+import ProjectDetailPage from './pages/ProjectDetailPage'
 import SyncPage from './pages/SyncPage'
 import SettingsPage from './pages/SettingsPage'
 
@@ -54,6 +55,7 @@ export default function App() {
             <Route path="/users" element={<UsersPage />} />
             <Route path="/users/:id" element={<UserDetailPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/projects/:id" element={<ProjectDetailPage />} />
             <Route path="/sync" element={<SyncPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>

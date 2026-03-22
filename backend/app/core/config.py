@@ -1,4 +1,4 @@
-"""Конфигурация приложения. Загрузка настроек из переменных окружения."""
+"""Конфигурация приложения. Загрузка настроек из переменных окружения и БД."""
 
 from pydantic_settings import BaseSettings
 
@@ -33,6 +33,37 @@ class RuntimeSettings:
 
     def __init__(self):
         self._overrides: dict[str, str] = {}
+        self._loaded_from_db = False
+
+    async def load_from_db(self):
+        """Загрузить настройки из БД при старте."""
+        from app.db.session import async_session_factory
+        from app.db.models import AppSetting
+        from sqlalchemy import select
+        try:
+            async with async_session_factory() as session:
+                result = await session.execute(select(AppSetting))
+                for row in result.scalars().all():
+                    if row.value:
+                        self._overrides[row.key] = row.value
+            self._loaded_from_db = True
+        except Exception:
+            pass
+
+    async def save_to_db(self, key: str, value: str):
+        """Сохранить настройку в БД."""
+        from app.db.session import async_session_factory
+        from app.db.models import AppSetting
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        try:
+            async with async_session_factory() as session:
+                stmt = pg_insert(AppSetting).values(key=key, value=value).on_conflict_do_update(
+                    index_elements=["key"], set_={"value": value}
+                )
+                await session.execute(stmt)
+                await session.commit()
+        except Exception:
+            pass
 
     @property
     def gitlab_url(self) -> str:

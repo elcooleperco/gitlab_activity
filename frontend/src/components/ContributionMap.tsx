@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Tooltip } from 'antd'
 import dayjs from 'dayjs'
+import isoWeek from 'dayjs/plugin/isoWeek'
 import { getContributionMap } from '../api'
+
+dayjs.extend(isoWeek)
 
 /** Цвета уровней активности (от 0 до 4+). */
 const LEVEL_COLORS = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
@@ -22,7 +25,7 @@ interface Props {
   onDayClick?: (date: string) => void
 }
 
-/** Тепловая карта вкладов — как в GitLab/GitHub. */
+/** Тепловая карта вкладов — как в GitLab/GitHub. Понедельник вверху, воскресенье внизу. */
 export default function ContributionMap({ userId, dateFrom, dateTo, onDayClick }: Props) {
   const [data, setData] = useState<Record<string, number>>({})
 
@@ -41,17 +44,16 @@ export default function ContributionMap({ userId, dateFrom, dateTo, onDayClick }
     } catch { /* Нет данных */ }
   }
 
-  /* Генерируем сетку недель */
-  const start = dayjs(dateFrom).startOf('week')
-  const end = dayjs(dateTo).endOf('week')
+  /* Генерируем сетку недель. isoWeek гарантирует ПН=1, ВС=7 */
+  const start = dayjs(dateFrom).startOf('isoWeek')
+  const end = dayjs(dateTo).endOf('isoWeek')
   const weeks: { date: string; count: number }[][] = []
   let current = start
   let week: { date: string; count: number }[] = []
 
   while (current.isBefore(end) || current.isSame(end, 'day')) {
     const dateStr = current.format('YYYY-MM-DD')
-    const inRange = current.isSame(dayjs(dateFrom), 'day') || current.isSame(dayjs(dateTo), 'day') ||
-      (current.isAfter(dayjs(dateFrom)) && current.isBefore(dayjs(dateTo)))
+    const inRange = !current.isBefore(dayjs(dateFrom), 'day') && !current.isAfter(dayjs(dateTo), 'day')
     week.push({ date: dateStr, count: inRange ? (data[dateStr] || 0) : -1 })
     if (week.length === 7) {
       weeks.push(week)
@@ -76,6 +78,7 @@ export default function ContributionMap({ userId, dateFrom, dateTo, onDayClick }
     }
   })
 
+  /* ПН вверху (index 0), ВС внизу (index 6) */
   const dayLabels = ['Пн', '', 'Ср', '', 'Пт', '', 'Вс']
 
   return (

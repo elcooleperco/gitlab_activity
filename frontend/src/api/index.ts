@@ -21,6 +21,7 @@ export const getUserActivity = (id: number, dateFrom: string, dateTo: string) =>
 
 /** Проекты */
 export const getProjects = (search?: string) => api.get('/projects', { params: { search } })
+export const getProject = (id: number) => api.get(`/projects/${id}`)
 
 /** Аналитика */
 export const getSummary = (dateFrom: string, dateTo: string, userIds?: number[]) =>
@@ -35,6 +36,23 @@ export const getContributionMap = (userId: number, dateFrom: string, dateTo: str
   api.get(`/analytics/contribution/${userId}`, { params: { date_from: dateFrom, date_to: dateTo } })
 export const getUserDayDetails = (userId: number, targetDate: string) =>
   api.get(`/analytics/user-day/${userId}`, { params: { target_date: targetDate } })
+
+/** Аналитика — действия пользователя */
+export const getUserActionTypes = (userId: number, dateFrom: string, dateTo: string) =>
+  api.get(`/analytics/user-action-types/${userId}`, { params: { date_from: dateFrom, date_to: dateTo } })
+export const getUserProjects = (userId: number, dateFrom: string, dateTo: string) =>
+  api.get(`/analytics/user-projects/${userId}`, { params: { date_from: dateFrom, date_to: dateTo } })
+export const getUserActivityLog = (
+  userId: number, dateFrom: string, dateTo: string,
+  projectId?: number, actionType?: string,
+) =>
+  api.get(`/analytics/user-activity-log/${userId}`, {
+    params: { date_from: dateFrom, date_to: dateTo, project_id: projectId, action_type: actionType },
+  })
+
+/** Аналитика — проекты */
+export const getProjectSummary = (projectId: number, dateFrom: string, dateTo: string) =>
+  api.get(`/analytics/project-summary/${projectId}`, { params: { date_from: dateFrom, date_to: dateTo } })
 
 /** Экспорт */
 export const exportSummaryCsv = (dateFrom: string, dateTo: string) =>
