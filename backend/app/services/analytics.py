@@ -752,6 +752,57 @@ class AnalyticsService:
                     "gitlab_url": f"{base}/-/pipelines/{p.id}" if base else "",
                 })
 
+        # События (pushed to, commented on, и т.д.)
+        if not action_type or action_type == "event":
+            q = select(Event).where(and_(
+                Event.user_id == user_id,
+                func.date(Event.created_at) >= date_from,
+                func.date(Event.created_at) <= date_to,
+            ))
+            if project_id:
+                q = q.where(Event.project_id == project_id)
+            q = q.order_by(desc(Event.created_at))
+            for ev in (await self.session.execute(q)).scalars().all():
+                base = _project_url(ev.project_id)
+                # Формируем URL в зависимости от типа события
+                url = ""
+                title = ev.action_name or "событие"
+                details = ""
+                if ev.push_ref:
+                    # Push-событие — ссылка на коммит или ветку
+                    if ev.push_commit_sha and base:
+                        url = f"{base}/-/commit/{ev.push_commit_sha}"
+                    elif base:
+                        url = f"{base}/-/tree/{ev.push_ref}"
+                    title = f"push → {ev.push_ref}"
+                    parts = []
+                    if ev.push_commit_count:
+                        parts.append(f"{ev.push_commit_count} коммит(ов)")
+                    if ev.push_commit_title:
+                        parts.append(ev.push_commit_title[:120])
+                    details = ", ".join(parts) if parts else ""
+                elif ev.target_type and ev.target_iid:
+                    # Событие над объектом (MR, Issue, и т.д.)
+                    if ev.target_type == "MergeRequest" and base:
+                        url = f"{base}/-/merge_requests/{ev.target_iid}"
+                    elif ev.target_type == "Issue" and base:
+                        url = f"{base}/-/issues/{ev.target_iid}"
+                    title = f"{ev.action_name} {ev.target_type}"
+                    if ev.target_title:
+                        details = ev.target_title[:120]
+                elif ev.target_type and ev.target_id and base:
+                    title = f"{ev.action_name} {ev.target_type} #{ev.target_id}"
+
+                actions.append({
+                    "type": "event",
+                    "date": ev.created_at.isoformat() if ev.created_at else None,
+                    "project_id": ev.project_id,
+                    "project_name": projects_map.get(ev.project_id, "") if ev.project_id else "",
+                    "title": title,
+                    "details": details,
+                    "gitlab_url": url,
+                })
+
         # Сортируем по дате (новые сверху)
         actions.sort(key=lambda a: a.get("date") or "", reverse=True)
         return actions

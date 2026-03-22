@@ -5,7 +5,8 @@ import {
   Avatar, Button, Table, Tag, Modal, Timeline, Tabs, Select,
 } from 'antd'
 import { UserOutlined, LinkOutlined } from '@ant-design/icons'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip } from 'recharts'
+import ToggleBarChart from '../components/ToggleBarChart'
 import dayjs, { Dayjs } from 'dayjs'
 import {
   getUser, getUserActivity, getDailyActivity, exportDailyCsv, getUserDayDetails,
@@ -22,6 +23,7 @@ const ACTION_TYPE_CONFIG: Record<string, { color: string; label: string }> = {
   issue: { color: 'orange', label: 'Issue' },
   note: { color: 'purple', label: 'Комментарий' },
   pipeline: { color: 'cyan', label: 'Пайплайн' },
+  event: { color: 'geekblue', label: 'Событие' },
 }
 
 const PIE_COLORS = ['#1890ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#2f54eb']
@@ -202,7 +204,7 @@ export default function UserDetailPage() {
                         <Pie data={actionTypes} dataKey="count" nameKey="action" cx="50%" cy="50%" outerRadius={80} label={false}>
                           {actionTypes.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                         </Pie>
-                        <Tooltip />
+                        <RechartsTooltip />
                       </PieChart>
                     </Col>
                     <Col span={12}>
@@ -241,36 +243,28 @@ export default function UserDetailPage() {
           </Row>
 
           {/* График активности по дням */}
-          <Card title="Активность по дням" style={{ marginBottom: 24 }}>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={daily}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis yAxisId="left" />
-                <YAxis yAxisId="right" orientation="right" />
-                <Tooltip />
-                <Legend />
-                <Bar yAxisId="left" dataKey="commits" fill="#1890ff" name="Коммиты" />
-                <Bar yAxisId="left" dataKey="merge_requests" fill="#52c41a" name="MR" />
-                <Bar yAxisId="left" dataKey="issues" fill="#faad14" name="Issues" />
-                <Bar yAxisId="left" dataKey="notes" fill="#722ed1" name="Комментарии" />
-              </BarChart>
-            </ResponsiveContainer>
+          <Card title="Активность по дням (клик на легенду — скрыть/показать)" style={{ marginBottom: 24 }}>
+            <ToggleBarChart
+              data={daily}
+              series={[
+                { dataKey: 'commits', fill: '#1890ff', name: 'Коммиты' },
+                { dataKey: 'merge_requests', fill: '#52c41a', name: 'MR' },
+                { dataKey: 'issues', fill: '#faad14', name: 'Issues' },
+                { dataKey: 'notes', fill: '#722ed1', name: 'Комментарии' },
+              ]}
+            />
           </Card>
 
           {/* График строк кода по дням */}
           <Card title="Строки кода по дням" style={{ marginBottom: 24 }}>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={daily}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="additions" fill="#52c41a" name="Добавлено строк" />
-                <Bar dataKey="deletions" fill="#f5222d" name="Удалено строк" />
-              </BarChart>
-            </ResponsiveContainer>
+            <ToggleBarChart
+              data={daily}
+              height={250}
+              series={[
+                { dataKey: 'additions', fill: '#52c41a', name: 'Добавлено строк' },
+                { dataKey: 'deletions', fill: '#f5222d', name: 'Удалено строк' },
+              ]}
+            />
           </Card>
 
           {/* Детальный лог действий */}

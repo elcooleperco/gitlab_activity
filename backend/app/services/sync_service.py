@@ -178,15 +178,32 @@ class SyncService:
             logger.warning("Не удалось получить коммиты", project_id=project_id, error=str(e))
             return
 
-        # Построить маппинг email -> user_id для привязки
-        result = await self.session.execute(select(GitlabUser.id, GitlabUser.email))
-        email_to_user = {row[1]: row[0] for row in result.fetchall() if row[1]}
+        # Построить маппинги для привязки коммитов к пользователям
+        result = await self.session.execute(
+            select(GitlabUser.id, GitlabUser.email, GitlabUser.username, GitlabUser.name)
+        )
+        email_to_user: dict[str, int] = {}
+        username_to_user: dict[str, int] = {}
+        name_to_user: dict[str, int] = {}
+        for row in result.fetchall():
+            if row.email:
+                email_to_user[row.email.lower()] = row.id
+            if row.username:
+                username_to_user[row.username.lower()] = row.id
+            if row.name:
+                name_to_user[row.name.lower()] = row.id
 
         count = 0
         for c in commits_data:
             stats = c.get("stats") or {}
             author_email = c.get("author_email", "")
-            user_id = email_to_user.get(author_email)
+            author_name = c.get("author_name", "")
+            # Пробуем привязать: сначала по email, потом по username, потом по имени
+            user_id = (
+                email_to_user.get(author_email.lower())
+                or username_to_user.get(author_name.lower())
+                or name_to_user.get(author_name.lower())
+            )
 
             stmt = pg_insert(Commit).values(
                 sha=c["id"],
@@ -390,6 +407,8 @@ class SyncService:
 
         count = 0
         for ev in events_data:
+            # Извлекаем данные о пуше (если есть)
+            push_data = ev.get("push_data") or {}
             stmt = pg_insert(Event).values(
                 id=ev["id"],
                 user_id=user_id,
@@ -397,11 +416,25 @@ class SyncService:
                 action_name=ev.get("action_name", "unknown"),
                 target_type=ev.get("target_type"),
                 target_id=ev.get("target_id"),
+                target_iid=ev.get("target_iid"),
+                target_title=ev.get("target_title"),
+                push_ref=push_data.get("ref"),
+                push_commit_count=push_data.get("commit_count"),
+                push_commit_title=push_data.get("commit_title"),
+                push_commit_sha=push_data.get("commit_to"),
                 created_at=_parse_dt(ev["created_at"]),
             ).on_conflict_do_update(
                 index_elements=["id"],
                 set_={
                     "action_name": ev.get("action_name", "unknown"),
+                    "target_type": ev.get("target_type"),
+                    "target_id": ev.get("target_id"),
+                    "target_iid": ev.get("target_iid"),
+                    "target_title": ev.get("target_title"),
+                    "push_ref": push_data.get("ref"),
+                    "push_commit_count": push_data.get("commit_count"),
+                    "push_commit_title": push_data.get("commit_title"),
+                    "push_commit_sha": push_data.get("commit_to"),
                 },
             )
             await self.session.execute(stmt)

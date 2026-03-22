@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Card, Col, Row, Statistic, DatePicker, Space, Table, Spin, Empty, Button, Select, Tabs, Tag } from 'antd'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, LineChart, Line } from 'recharts'
+import { Card, Col, Row, Statistic, DatePicker, Space, Table, Spin, Empty, Button, Select, Tabs, Tag, Switch } from 'antd'
 import dayjs, { Dayjs } from 'dayjs'
 import { getSummary, getDailyActivity, getUsers, exportSummaryCsv } from '../api'
+import ToggleBarChart from '../components/ToggleBarChart'
+import ToggleLineChart from '../components/ToggleLineChart'
 import { Link } from 'react-router-dom'
 
 const { RangePicker } = DatePicker
@@ -20,6 +21,7 @@ export default function DashboardPage() {
   const [allUsers, setAllUsers] = useState<any[]>([])
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([])
   const [loading, setLoading] = useState(false)
+  const [highlightBelowMedian, setHighlightBelowMedian] = useState(false)
 
   const dateFrom = dateRange[0].format('YYYY-MM-DD')
   const dateTo = dateRange[1].format('YYYY-MM-DD')
@@ -86,6 +88,16 @@ export default function DashboardPage() {
   /* Общее кол-во строк */
   const totalAdditions = summary.reduce((s, u) => s + (u.additions || 0), 0)
   const totalDeletions = summary.reduce((s, u) => s + (u.deletions || 0), 0)
+
+  /* Медиана, мин, макс оценки среди активных */
+  const activeScores = activeUsers.map(u => u.total_score).sort((a, b) => a - b)
+  const medianScore = activeScores.length > 0
+    ? activeScores.length % 2 === 0
+      ? (activeScores[activeScores.length / 2 - 1] + activeScores[activeScores.length / 2]) / 2
+      : activeScores[Math.floor(activeScores.length / 2)]
+    : 0
+  const minScore = activeScores.length > 0 ? activeScores[0] : 0
+  const maxScore = activeScores.length > 0 ? activeScores[activeScores.length - 1] : 0
 
   /* Колонки таблицы рейтинга */
   const rankingColumns = [
@@ -157,58 +169,50 @@ export default function DashboardPage() {
             <Col span={3}><Card><Statistic title="Комментариев" value={totalNotes} /></Card></Col>
           </Row>
 
-          {/* График — сравнение или общий */}
-          <Card title={isCompareMode ? 'Сравнение пользователей по дням' : 'Активность по дням'} style={{ marginBottom: 24 }}>
-            <ResponsiveContainer width="100%" height={350}>
-              {isCompareMode ? (
-                <LineChart data={compareChartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  {selectedUserIds.map((uid, i) => (
-                    <Line
-                      key={uid}
-                      type="monotone"
-                      dataKey={userMap[uid] || `user_${uid}`}
-                      stroke={USER_COLORS[i % USER_COLORS.length]}
-                      strokeWidth={2}
-                      dot={false}
-                      name={userMap[uid] || `user_${uid}`}
-                    />
-                  ))}
-                </LineChart>
-              ) : (
-                <BarChart data={dailyChartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="commits" fill="#1890ff" name="Коммиты" />
-                  <Bar dataKey="mr" fill="#52c41a" name="MR" />
-                  <Bar dataKey="issues" fill="#faad14" name="Issues" />
-                  <Bar dataKey="notes" fill="#722ed1" name="Комментарии" />
-                </BarChart>
-              )}
-            </ResponsiveContainer>
+          {/* График — сравнение или общий (клик на легенду скрывает/показывает) */}
+          <Card title={isCompareMode ? 'Сравнение пользователей по дням' : 'Активность по дням (клик на легенду — скрыть/показать)'} style={{ marginBottom: 24 }}>
+            {isCompareMode ? (
+              <ToggleLineChart
+                data={compareChartData}
+                series={selectedUserIds.map((uid, i) => ({
+                  dataKey: userMap[uid] || `user_${uid}`,
+                  stroke: USER_COLORS[i % USER_COLORS.length],
+                  name: userMap[uid] || `user_${uid}`,
+                }))}
+              />
+            ) : (
+              <ToggleBarChart
+                data={dailyChartData}
+                height={350}
+                series={[
+                  { dataKey: 'commits', fill: '#1890ff', name: 'Коммиты' },
+                  { dataKey: 'mr', fill: '#52c41a', name: 'MR' },
+                  { dataKey: 'issues', fill: '#faad14', name: 'Issues' },
+                  { dataKey: 'notes', fill: '#722ed1', name: 'Комментарии' },
+                ]}
+              />
+            )}
           </Card>
 
           {/* График строк кода по дням */}
           <Card title="Строки кода по дням" style={{ marginBottom: 24 }}>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={dailyChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="additions" fill="#52c41a" name="Добавлено строк" />
-                <Bar dataKey="deletions" fill="#f5222d" name="Удалено строк" />
-              </BarChart>
-            </ResponsiveContainer>
+            <ToggleBarChart
+              data={dailyChartData}
+              height={250}
+              series={[
+                { dataKey: 'additions', fill: '#52c41a', name: 'Добавлено строк' },
+                { dataKey: 'deletions', fill: '#f5222d', name: 'Удалено строк' },
+              ]}
+            />
           </Card>
+
+          {/* Статистика оценок */}
+          <Row gutter={16} style={{ marginBottom: 16 }}>
+            <Col span={6}><Card><Statistic title="Медиана оценки" value={medianScore} precision={0} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Мин. оценка" value={minScore} valueStyle={{ color: '#cf1322' }} /></Card></Col>
+            <Col span={6}><Card><Statistic title="Макс. оценка" value={maxScore} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+            <Col span={6}><Card><Space><span>Подсветить ниже медианы:</span><Switch checked={highlightBelowMedian} onChange={setHighlightBelowMedian} /></Space></Card></Col>
+          </Row>
 
           <Tabs
             defaultActiveKey="active"
@@ -223,6 +227,9 @@ export default function DashboardPage() {
                     rowKey="user_id"
                     pagination={{ pageSize: 20 }}
                     size="small"
+                    rowClassName={(r: any) =>
+                      highlightBelowMedian && r.total_score < medianScore ? 'row-below-median' : ''
+                    }
                   />
                 ),
               },
