@@ -25,8 +25,6 @@ services:
     build: ./backend
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    dns:
-      - ${DNS:-8.8.8.8}
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/gitlab_analyzer}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -48,8 +46,6 @@ services:
 
   frontend:
     build: ./frontend
-    dns:
-      - ${DNS:-8.8.8.8}
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
